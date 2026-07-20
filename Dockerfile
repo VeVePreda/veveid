@@ -33,6 +33,7 @@ COPY server.ts ./
 # (On ne lance pas la suite de tests complète : un test sensible à
 # l'environnement bloquerait tout déploiement, ce qui serait pire.)
 RUN node -e "await import('./src/db.ts'); \
+  await import('./src/demarrage.ts'); \
   await import('./src/avoirs.ts'); \
   await import('./src/defi.ts'); \
   await import('./src/jetons.ts'); \

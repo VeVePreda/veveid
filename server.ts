@@ -13,6 +13,7 @@ import {
 import { signer, memeSecret, fabriquerCles } from './src/jetons.ts';
 import { jeux, jeuConnu, retourAutorise, origineDe } from './src/jeux.ts';
 import { accueil, pageChoisir, pageDefi, pageCompte, page } from './src/vues.ts';
+import { annoncerDemarrage } from './src/demarrage.ts';
 
 const PORT = Number(process.env.PORT ?? 3000);
 const clePrivee = () => process.env.ID_PRIVEE ?? '';
@@ -227,13 +228,15 @@ export const serveur = createServer(async (req, res) => {
 });
 
 export function demarrer(port = PORT): void {
+  // ⭐ AVANT d'ouvrir le port. Si l'installation est fautive, on veut que ce
+  // soit la PREMIÈRE chose lisible dans le journal, pas une ligne noyée
+  // après « à l'écoute ».
+  annoncerDemarrage();
   serveur.listen(port, () => {
     console.log(`[identité] à l'écoute sur ${port}`);
     const j = [...jeux().keys()];
     console.log(`[identité] jeux déclarés : ${j.length ? j.join(', ') : 'AUCUN — variable JEUX vide'}`);
-    if (!clePrivee() || !clePubliqueTexte())
-      console.error('🔴 [identité] ID_PRIVEE ou ID_PUBLIQUE absente : aucun jeton ne sera émis.');
-    if (!cleService()) console.warn('[identité] ID_SERVICE absente : l’API est fermée aux jeux.');
+    // (clés et ID_SERVICE : dits par annoncerDemarrage() ci-dessus)
     const menage = setInterval(() => {
       purgerSeaux(); purgerDefis();
       const n = purgerComptes();
