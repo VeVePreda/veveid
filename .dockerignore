@@ -1,0 +1,10 @@
+# Rien de tout cela n'a sa place dans une image de production — et surtout
+# pas une base de données oubliée dans l'arbre, qui serait alors FIGÉE dans
+# l'image et masquerait la vraie base du volume.
+*.db
+*.db-wal
+*.db-shm
+sauvegardes/
+node_modules/
+.git/
+*.zip
