@@ -1,0 +1,13 @@
+{
+  "name": "veve-id",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node server.ts",
+    "test": "node --test 'test/*.test.ts'",
+    "cles": "node server.ts --cles"
+  }
+}

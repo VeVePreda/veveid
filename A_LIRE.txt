@@ -1,0 +1,196 @@
+VEVE-ID — le service d'identité de la plateforme
+20 juillet 2026 · premier dépôt
+
+════════════════════════════════════════════════════════════════════════
+CE QUE C'EST, ET POURQUOI
+════════════════════════════════════════════════════════════════════════
+
+Un service séparé qui fait QUATRE choses, une fois pour TOUS les jeux :
+
+  · IDENTIFIER — prouver qu'un portefeuille VeVe est bien le vôtre
+  · LES AVOIRS — tenir la liste des collectibles détenus
+  · L'ABONNEMENT
+  · LA SUPPRESSION de compte
+
+⭐ « AVOIRS », C'EST LE MOT QUE J'AURAIS DÛ EMPLOYER DÈS LE DÉBUT. Je
+   disais « roster », qui est du jargon de jeu vidéo : c'est simplement
+   la liste des collectibles que vous possédez, ceux qui deviennent des
+   héros. J'ai renommé partout.
+
+🔴 POURQUOI UN SERVICE À PART, ET PAS UNE BIBLIOTHÈQUE COPIÉE :
+
+  ① UN SEUL QUOTA. Chaque lecture tape CollectScan, un service tiers
+    gratuit. Avec trois jeux qui relisent chacun tous les portefeuilles,
+    on triple la charge pour obtenir trois fois la même réponse — et on
+    finit par se faire fermer la porte.
+  ② UNE SEULE VÉRITÉ. Deux jeux qui synchronisent séparément divergent :
+    l'un voit une revente, l'autre pas encore. Le joueur constate que son
+    héros existe ici et plus là.
+  ③ UN SEUL ENDROIT À CORRIGER le jour où VeVe change son API.
+  ④ ET LE JOUEUR NE PROUVE QU'UNE FOIS. C'était votre demande.
+
+⛔ CE QU'IL NE FAIT PAS : aucune donnée de jeu. Ni héros, ni niveau, ni
+   carte, ni codex. Le jour où l'on y mettrait « le niveau du héros », ce
+   ne serait plus un service d'identité mais un second serveur de jeu, et
+   il faudrait le migrer à chaque règle qui change.
+
+
+════════════════════════════════════════════════════════════════════════
+🔴 COMMENT UN JEU S'Y BRANCHE — LE CONTRAT
+════════════════════════════════════════════════════════════════════════
+
+Pour brancher un NOUVEAU jeu, il faut exactement trois choses :
+
+  1. copier `plateforme.ts` (≈ 150 lignes, aucune dépendance) ;
+  2. déclarer le jeu dans la variable JEUX du service ;
+  3. poser trois variables d'environnement côté jeu.
+
+⭐ C'EST LA SEULE MESURE QUI COMPTE. Si un jour brancher un jeu demande
+   plus que ça, c'est que le contrat a dérivé — et il faudra le
+   ramener, pas s'en accommoder.
+
+Le déroulé, vu du jeu :
+  · joueur sans session → on le renvoie vers le service ;
+  · il prouve sa collection là-bas (le jeu ne voit rien de tout ça) ;
+  · il revient sur `…/retour?jeton=…` ;
+  · le jeu vérifie la signature, connaît le compte, pose SA session ;
+  · quand il a besoin des collectibles, il appelle l'API du service.
+
+🔴 SIGNATURE À CLÉ PUBLIQUE, PAS SECRET PARTAGÉ. Un secret partagé serait
+   plus simple, mais alors **n'importe quel jeu pourrait FABRIQUER un
+   jeton** — donc se déclarer propriétaire de n'importe quel
+   portefeuille. Ici, seul le service SIGNE ; les jeux ne peuvent que
+   VÉRIFIER. Un jeu compromis n'usurpe personne.
+
+⭐ Et ça ne dépend d'AUCUN domaine. Un cookie partagé sur
+   `.digitalcollectible.net` marcherait aujourd'hui — mais vous avez dit
+   que ce domaine n'a pas vocation à héberger la plateforme. Un jeton
+   signé traverse n'importe quelle frontière : rien à réécrire le jour du
+   déménagement.
+
+
+════════════════════════════════════════════════════════════════════════
+⚠️ LES DEUX PIÈGES DE SÉCURITÉ, ET LEURS GARDES
+════════════════════════════════════════════════════════════════════════
+
+① LA REDIRECTION OUVERTE. Sans garde, n'importe qui enverrait un joueur
+  sur `id.../connexion?jeu=loop&retour=https://chez-moi.example` et
+  récupérerait, dans son propre journal, un jeton valide pour ce joueur.
+  ⇒ La variable JEUX est une liste blanche d'ORIGINES.
+  ⚠️ On compare des ORIGINES, pas des préfixes : un contrôle du genre
+     `commence par` laisserait passer
+     `https://loop.digitalcollectible.net.chez-moi.example`, un domaine
+     qui appartient à l'attaquant. C'est testé.
+
+② LE JETON QUI TRAÎNE. Il passe dans une URL, donc dans les historiques
+  et les journaux de serveur. ⇒ Il vit DEUX MINUTES. Le jeu s'en sert
+  pour poser sa session, puis il n'ouvre plus rien.
+
+
+════════════════════════════════════════════════════════════════════════
+INSTALLATION — DANS CET ORDRE
+════════════════════════════════════════════════════════════════════════
+
+Deux ressources Coolify, deux sous-domaines. Comme pour l'arcade.
+
+── ① FABRIQUER LES CLÉS (une fois, sur votre machine ou dans le conteneur)
+
+    node server.ts --cles
+
+  Il affiche deux lignes, ID_PUBLIQUE et ID_PRIVEE. Gardez-les.
+  ⛔ LA CLÉ PRIVÉE NE VA JAMAIS DANS LE DÉPÔT. C'est exactement ce qui
+     avait fait fuiter le jeton du bot Discord.
+
+  Fabriquez aussi un secret de service, au hasard :
+    node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
+
+── ② DÉPOSER LES DEUX DÉPÔTS
+
+  GitHub → New repository → `veve-id`, privé. Puis `loop`, privé.
+  Décompressez, envoyez le CONTENU de chaque dossier (pas le dossier).
+  ⚠️ Le `.dockerignore` commence par un point : Windows le masque et
+     l'explorateur ne l'envoie pas. Vérifiez qu'il est bien là.
+
+── ③ LE SERVICE D'IDENTITÉ
+
+  Add Resource → Dockerfile → dépôt `veve-id`
+  Domaine : id.digitalcollectible.net
+  Persistent Storage (PAS « Storages ») → monter /data
+
+    PORT=3000
+    DB_PATH=/data/veve-id.db
+    SESSION_SECRET=<32 caractères au hasard>
+    ID_PUBLIQUE=<la clé publique>
+    ID_PRIVEE=<la clé privée>
+    ID_SERVICE=<le secret de service>
+    JEUX=loop=https://loop.digitalcollectible.net
+
+  ⚠️ JEUX doit contenir l'adresse EXACTE du jeu, protocole compris.
+     Sans elle, le jeu sera refusé — et c'est voulu.
+
+  Déployez. Vérifiez : `https://id.digitalcollectible.net/sante`
+  et que `/cle-publique` rend bien la même chaîne que ID_PUBLIQUE.
+
+── ④ LOOP
+
+  Add Resource → Dockerfile → dépôt `loop`
+  Domaine : loop.digitalcollectible.net
+  Persistent Storage → monter /data
+
+    PORT=3000
+    DB_PATH=/data/loop.db
+    SESSION_SECRET=<un AUTRE secret, 32 caractères>
+    SITE_URL=https://loop.digitalcollectible.net
+    JEU_ID=loop
+    ID_URL=https://id.digitalcollectible.net
+    ID_PUBLIQUE=<la MÊME clé publique qu'au ③>
+    ID_SERVICE=<le MÊME secret de service qu'au ③>
+    ADMIN_TOKEN=<un secret à vous>          → /admin?t=<ce secret>
+    VAPID_PUBLIC / VAPID_PRIVATE / VAPID_CONTACT   (poussée, facultatif)
+
+  ⚠️ SITE_URL doit être exact : c'est l'adresse de retour que Loop
+     envoie au service, et le service la compare à JEUX. Une faute ici
+     donne « Adresse de retour refusée » — c'est l'erreur la plus
+     probable de l'installation.
+
+── ⑤ L'ÉPREUVE
+
+  1. Ouvrez `https://loop.digitalcollectible.net` → vous devez atterrir
+     sur le service d'identité.
+  2. Entrez votre adresse, choisissez deux collectibles NON listés,
+     mettez-les en vente **entre 15 000 et 50 000**, annulez.
+  3. Vous revenez dans Loop, avec vos héros.
+
+  Si ça bloque, regardez dans cet ordre :
+    · les logs du service (« jeux déclarés : … » au démarrage) ;
+    · `/cle-publique` du service = ID_PUBLIQUE de Loop ?
+    · SITE_URL de Loop = l'entrée JEUX du service, au caractère près ?
+
+
+════════════════════════════════════════════════════════════════════════
+CE QUI N'EST PAS FAIT
+════════════════════════════════════════════════════════════════════════
+
+⚠️ MIGHTYSARENA N'EST PAS MIGRÉ. Il est EN PRODUCTION et vous ne m'avez
+   pas demandé d'y toucher. Il garde sa vérification locale — elle
+   marche. Le jour où on le migrera, c'est le même travail que pour
+   Loop : copier `plateforme.ts`, ajouter l'arcade dans JEUX, et retirer
+   `challenge.ts`. ⚠️ Les comptes existants seront ADOPTÉS par leur
+   portefeuille (le code le prévoit et c'est testé), donc personne ne
+   perd sa progression.
+
+⚠️ La resynchronisation quotidienne automatique des avoirs n'est pas
+   branchée : on relit à la vérification et sur demande. Le tour de fond
+   viendra quand il y aura assez de comptes pour que ça compte.
+
+⚠️ Le service ne sait pas encore ENCAISSER un abonnement — il sait le
+   porter. Aucun paiement n'est branché nulle part, c'est assumé.
+
+
+════════════════════════════════════════════════════════════════════════
+LES COMMANDES
+════════════════════════════════════════════════════════════════════════
+
+  npm test     28 tests
+  npm start    le service
+  npm run cles fabrique une paire de clés
