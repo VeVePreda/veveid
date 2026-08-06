@@ -68,6 +68,32 @@ CREATE TABLE IF NOT EXISTS comptes (
   supprime_le TEXT
 );
 
+-- ═══════════════════════════════════════════════════════════════════════
+-- LE RELAIS (lot 99) : entrer ICI depuis une session ouverte sur un SITE.
+-- ═══════════════════════════════════════════════════════════════════════
+-- ⭐⭐ LE PARCOURS DE PREUVE DE PROPRIETE VIT SUR CE SERVICE, PAS SUR LES
+--    SITES. Il lit la chaine, il tient les defis, il connait les avoirs.
+--    Le recopier dans veveprice serait l'ecrire une troisieme fois apres
+--    Loop et MightysArena -- c'est exactement ce que le deplacement du
+--    20/07 a voulu arreter.
+-- ⭐ Un membre connecte sur veveprice doit donc pouvoir ARRIVER ici sans
+--    redemander un lien par courriel. C'est le seul objet de cette table.
+--
+-- 🔴 MEME FORME QUE "codes", ET POUR LA MEME RAISON : ce qui voyage dans
+--    une URL doit etre a USAGE UNIQUE et vivre une minute. La difference
+--    tient en un mot -- "codes" ouvre une session sur le SITE, "relais"
+--    ouvre une session ICI. Deux portes, deux jetons : un seul jeton qui
+--    ouvrirait les deux serait une elevation de privilege deguisee en
+--    economie de code.
+CREATE TABLE IF NOT EXISTS relais (
+  empreinte TEXT PRIMARY KEY,
+  compte_id TEXT NOT NULL,
+  vers TEXT NOT NULL,
+  cree TEXT NOT NULL,
+  expire TEXT NOT NULL,
+  consomme_le TEXT
+);
+
 CREATE TABLE IF NOT EXISTS defis (
   id TEXT PRIMARY KEY, wallet TEXT NOT NULL, compte_id TEXT,
   cibles TEXT NOT NULL, vus TEXT NOT NULL DEFAULT '[]',

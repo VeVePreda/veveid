@@ -6,6 +6,7 @@ import { COOKIE, creerJeton, lireJeton, lireCookie } from './src/session.ts';
 import { autorise, adresse, purgerSeaux, REGLES } from './src/limite.ts';
 import { isWallet } from './src/collectchain.ts';
 import { preparer, creerDefi, lireDefi, defiActif, rafraichir, avancement, lier, estVerifie, purgerDefis, NB_CIBLES } from './src/defi.ts';
+import { creerRelais, consommerRelais, purgerRelais, DESTINATIONS } from './src/relais.ts';
 import {
   creerOuLireCompte, creerOuLireCompteParEmail, lireCompteParEmail, lireCompte,
   synchroniser, avoirsDe,
@@ -128,6 +129,12 @@ export const serveur = createServer(async (req, res) => {
         dernier: dernierEnvoi(),
       },
       sites: [...jeux().keys()],
+      // ⭐ LES DESTINATIONS DU RELAIS SONT PUBLIQUES, ET C'EST VOULU : elles
+      // ne révèlent rien (deux chemins de ce service) et elles répondent à
+      // la seule question qu'un site se pose en intégrant la passerelle —
+      // « quelles valeurs de `vers` acceptes-tu ? ». Sans ça, la réponse
+      // vit dans un fichier d'un autre dépôt, et se périme en silence.
+      relais: Object.keys(DESTINATIONS),
     });
 
     /**
@@ -297,6 +304,118 @@ export const serveur = createServer(async (req, res) => {
         return json(res, { ok: revoquer(String(b.sid ?? '')) });
       }
 
+      /**
+       * ═══════════════════════════════════════════════════════════════
+       * ⭐⭐⭐ LES TROIS ROUTES DU LOT 99 — le site parle POUR un membre.
+       * ═══════════════════════════════════════════════════════════════
+       * Elles sont ici, AVANT `?compte=`, pour la même raison que celles
+       * du lot 90 : elles ne portent pas d'identifiant de compte, elles
+       * portent un `sid`. Posées plus bas, elles auraient rendu « compte
+       * inconnu » sur une session parfaitement valide.
+       *
+       * 🔴 POURQUOI LE `sid` ET PAS LE `?compte=`. Le site ne DÉTIENT pas
+       *    l'identifiant du compte : il a un cookie de session, et c'est
+       *    tout. Lui faire porter l'identifiant reviendrait à le laisser
+       *    DÉSIGNER un compte — avec le secret de service, il pourrait
+       *    lire ou supprimer n'importe lequel. Ici il ne peut agir que
+       *    sur la session qu'il a réellement en main, et c'est veveid qui
+       *    la résout.
+       * ⭐⭐ LE SECRET DE SERVICE DIT « TU ES UN SITE », PAS « TU ES CETTE
+       *    PERSONNE ». Les deux preuves sont exigées ensemble.
+       */
+
+      /**
+       * L'état du compte pour la page « Mon compte » d'un site.
+       *
+       * ⚠️ ELLE EST SÉPARÉE DE `/session/<sid>`, QUI RESTE PUBLIQUE ET NE
+       *    REND QUE LE PALIER. Son commentaire l'annonçait : « si un jour
+       *    on lui fait rendre l'adresse e-mail, il faudra la fermer ».
+       *    On ne l'a pas fermée — on a ouvert une AUTRE porte, gardée par
+       *    le secret de service. Le middleware, lui, continue d'appeler la
+       *    route publique à chaque page rendue, sans rien porter.
+       */
+      if (m === 'GET' && p === '/api/session') {
+        if (trop(REGLES.api)) return json(res, { erreur: 'trop de requêtes' }, 429);
+        const e = etatDeLaSession(url.searchParams.get('sid') ?? '');
+        if (!e.compte) return json(res, { erreur: 'session inconnue' }, 404);
+        const k = lireCompte(e.compte);
+        if (!k) return json(res, { erreur: 'session inconnue' }, 404);
+        return json(res, {
+          compte: k.id, email: k.email, palier: e.palier,
+          wallet: k.wallet ?? null, verifie: !!k.verifie, verifie_le: k.verifie_le ?? null,
+          abonne: estAbonne(k) ? k.abonne_jusqu_a : null,
+          cree_le: k.cree_le,
+          // ⭐ Toujours `false` ici, et ce n'est pas un oubli :
+          // `etatDeLaSession` ferme la porte dès qu'une suppression est
+          // demandée. Le champ existe pour que le site n'ait pas à deviner
+          // ce que veut dire un 404 — il le lira le jour où la règle
+          // changera, sans qu'on ait à modifier deux dépôts.
+          supprime: !!k.supprime_le,
+        });
+      }
+
+      /**
+       * ⭐⭐ LE RELAIS — faire entrer ICI quelqu'un qui est connecté LÀ-BAS.
+       * Le site demande un jeton pour SA session ; on rend une adresse
+       * complète, à ouvrir dans le navigateur de la personne.
+       * ⛔ On ne rend pas le jeton nu : le site n'a rien à en faire d'autre
+       *    que de rediriger, et une adresse complète interdit qu'il se
+       *    fabrique une destination.
+       */
+      if (m === 'POST' && p === '/api/passerelle') {
+        if (trop(REGLES.api)) return json(res, { erreur: 'trop de requêtes' }, 429);
+        const b = await jsonDe(req);
+        const e = etatDeLaSession(String(b.sid ?? ''));
+        if (!e.compte) return json(res, { erreur: 'session inconnue' }, 404);
+        const vers_ = String(b.vers ?? 'compte');
+        const jeton = creerRelais(e.compte, vers_);
+        if (!jeton) return json(res, { erreur: `destination inconnue : ${vers_}` }, 400);
+        const base = String(process.env.URL_PUBLIQUE ?? '').replace(/\/$/, '');
+        // 🔴 SANS `URL_PUBLIQUE`, ON NE DEVINE PAS. Se rabattre sur l'en-tête
+        // `Host` enverrait la personne chez qui a fait la requête — c'est la
+        // même faute que le lien de connexion refuse déjà de commettre.
+        if (!base) return json(res, { erreur: 'URL_PUBLIQUE absente' }, 500);
+        return json(res, { url: `${base}/entrer-par-relais?r=${encodeURIComponent(jeton)}` });
+      }
+
+      /**
+       * 🔴 LA SUPPRESSION DEMANDÉE DEPUIS UN SITE.
+       * ⭐ Elle ne fait qu'appeler ce qui existait déjà : le délai de grâce,
+       *   la révocation de toutes les sessions, l'effacement différé. On
+       *   n'a pas écrit une deuxième suppression « pour les sites » — il y
+       *   en aurait eu deux à corriger le jour d'une erreur.
+       * ⚠️ CONSÉQUENCE À CONNAÎTRE, ET À DIRE À LA PERSONNE :
+       *   `etatDeLaSession` refuse un compte marqué supprimé. La session
+       *   du site meurt donc DANS LA SECONDE — c'est-à-dire qu'on ne
+       *   pourra PAS annuler depuis le site. L'annulation vit ici, sur ce
+       *   service, avec un lien de connexion par courriel.
+       */
+      if (m === 'POST' && p === '/api/supprimer') {
+        if (trop(REGLES.api)) return json(res, { erreur: 'trop de requêtes' }, 429);
+        const b = await jsonDe(req);
+        const e = etatDeLaSession(String(b.sid ?? ''));
+        if (!e.compte) return json(res, { erreur: 'session inconnue' }, 404);
+        /**
+         * ⭐⭐ LA CONFIRMATION SE VÉRIFIE ICI, PAS SUR LE SITE.
+         * MightysArena demandait de recopier son adresse de portefeuille ;
+         * le principe est le même : un geste destructeur exige de RECOPIER
+         * quelque chose, pas de cliquer un bouton de plus. Mais le site ne
+         * doit pas être le juge — il ne connaît l'adresse que parce qu'on
+         * la lui a dite, et un contrôle fait par celui qui détient déjà la
+         * réponse ne prouve rien.
+         * ⛔ Comparaison insensible à la casse et aux espaces : refuser une
+         *   suppression pour une majuscule serait une frustration gratuite.
+         */
+        const k = lireCompte(e.compte);
+        const attendu = String(k?.email ?? '').trim().toLowerCase();
+        const fourni = String(b.confirmation ?? '').trim().toLowerCase();
+        if (!attendu || fourni !== attendu)
+          return json(res, { ok: false, message: 'La confirmation ne correspond pas à l’adresse du compte.' }, 400);
+        const bilan = demanderSuppression(e.compte);
+        if (bilan.ok) revoquerTout(e.compte);
+        return json(res, bilan);
+      }
+
       const c = lireCompte(url.searchParams.get('compte') ?? '');
       /**
        * 🔴 CORRIGÉ AU LOT 89 : le contrôle était `!c || !c.verifie`.
@@ -457,6 +576,26 @@ export const serveur = createServer(async (req, res) => {
      *    servi : sans ça il resterait dans l'historique du navigateur et
      *    dans l'en-tête `Referer` de chaque lien cliqué depuis la page.
      */
+    /**
+     * ⭐⭐ LA PORTE DU RELAIS — publique, comme `/entrer-par-lien`, et pour
+     * la même raison : c'est le NAVIGATEUR de la personne qui l'ouvre, et
+     * un navigateur ne porte pas le secret de service.
+     * ⭐ Ce qui la protège est le jeton : 256 bits, une minute, un usage.
+     * ⛔ Elle est placée AVANT la porte de session (`if (!compte)`), sinon
+     *   elle renverrait vers l'accueil exactement les gens qu'elle existe
+     *   pour faire entrer — la boucle de redirections du lot 89, remise au
+     *   goût du jour.
+     */
+    if (m === 'GET' && p === '/entrer-par-relais') {
+      if (trop(REGLES.verifier))
+        return html(res, accueil(undefined, 'Trop de tentatives. Patientez quelques minutes.'), 429);
+      const v = consommerRelais(url.searchParams.get('r') ?? '');
+      if (!v.compteId) return html(res, accueil(undefined, v.pourquoi), 400);
+      return vers(res, v.chemin ?? '/compte', {
+        'set-cookie': `${COOKIE}=${creerJeton(v.compteId)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000; Secure`,
+      });
+    }
+
     if (m === 'GET' && p === '/entrer-par-lien') {
       if (trop(REGLES.verifier))
         return html(res, accueil(undefined, 'Trop de tentatives. Patientez quelques minutes.'), 429);
@@ -658,7 +797,7 @@ export function demarrer(port = PORT): void {
     console.log(`[identité] jeux déclarés : ${j.length ? j.join(', ') : 'AUCUN — variable JEUX vide'}`);
     // (clés et ID_SERVICE : dits par annoncerDemarrage() ci-dessus)
     const menage = setInterval(() => {
-      purgerSeaux(); purgerDefis(); purgerLiens(); purgerSessions();
+      purgerSeaux(); purgerDefis(); purgerLiens(); purgerSessions(); purgerRelais();
       const n = purgerComptes();
       if (n) console.log(`[identité] ${n} compte(s) effacé(s) après le délai de grâce.`);
     }, 3600_000);
