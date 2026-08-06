@@ -7,15 +7,41 @@ import { autorise, adresse, purgerSeaux, REGLES } from './src/limite.ts';
 import { isWallet } from './src/collectchain.ts';
 import { preparer, creerDefi, lireDefi, defiActif, rafraichir, avancement, lier, estVerifie, purgerDefis, NB_CIBLES } from './src/defi.ts';
 import {
-  creerOuLireCompte, lireCompte, synchroniser, avoirsDe, dernierSync, estAbonne,
-  noterAcces, demanderSuppression, annulerSuppression, purgerComptes, accorderAbonnement,
+  creerOuLireCompte, creerOuLireCompteParEmail, lireCompteParEmail, lireCompte,
+  synchroniser, avoirsDe,
+  dernierSync, estAbonne, paliDe, portefeuilleOccupe, poserPortefeuille, noterAcces, demanderSuppression, annulerSuppression,
+  purgerComptes, accorderAbonnement,
 } from './src/avoirs.ts';
+import { demander, consommer, purgerLiens, DUREE_MIN } from './src/lien_magique.ts';
+import {
+  creerCode, echanger, etatDeLaSession, revoquer, revoquerTout, purgerSessions,
+} from './src/sessions.ts';
+import { envoyer, courrielDeConnexion } from './src/courriel.ts';
 import { signer, memeSecret, fabriquerCles } from './src/jetons.ts';
 import { jeux, jeuConnu, retourAutorise, origineDe } from './src/jeux.ts';
-import { accueil, pageChoisir, pageDefi, pageCompte, page } from './src/vues.ts';
+import { accueil, pageChoisir, pageDefi, pageCompte, pageLienEnvoye, page } from './src/vues.ts';
 import { annoncerDemarrage } from './src/demarrage.ts';
 
 const PORT = Number(process.env.PORT ?? 3000);
+
+/**
+ * 🔴🔴 L'ADRESSE PUBLIQUE VIENT D'UNE VARIABLE, JAMAIS DE L'EN-TÊTE `Host`.
+ *
+ * C'est LE défaut classique des liens de connexion par courriel, et il est
+ * silencieux. Construire le lien avec `req.headers.host` revient à laisser
+ * l'appelant choisir où pointe le lien : une requête
+ *   POST /inscription   Host: chez-moi.example
+ * ferait partir, vers la VRAIE adresse de la personne, un vrai courriel à
+ * notre nom, contenant un lien vers le serveur de l'attaquant — qui n'a
+ * plus qu'à récupérer le jeton en clair et entrer à sa place.
+ *
+ * ⚠️ Le même raisonnement que `retourAutorise()` pour les jeux : une
+ *    destination fournie par le client n'est pas une destination.
+ *
+ * ⛔ Vide, on N'ENVOIE RIEN. Le repli tentant (« prends le Host ») est
+ *    exactement la faille. Le contrôle de démarrage le crie.
+ */
+const urlPublique = () => (process.env.URL_PUBLIQUE ?? '').replace(/\/+$/, '');
 const clePrivee = () => process.env.ID_PRIVEE ?? '';
 const clePubliqueTexte = () => process.env.ID_PUBLIQUE ?? '';
 const cleService = () => process.env.ID_SERVICE ?? '';
@@ -31,10 +57,16 @@ const json = (res: ServerResponse, o: unknown, code = 200) => {
 const vers = (res: ServerResponse, url: string, entetes: Record<string, string> = {}) => {
   res.writeHead(302, { location: url, ...entetes }); res.end();
 };
-const corpsDe = async (req: any): Promise<URLSearchParams> => {
+const brutDe = async (req: any): Promise<string> => {
   const c: Buffer[] = []; let taille = 0;
   for await (const x of req) { taille += (x as Buffer).length; if (taille > 64_000) break; c.push(x as Buffer); }
-  return new URLSearchParams(Buffer.concat(c).toString());
+  return Buffer.concat(c).toString();
+};
+const corpsDe = async (req: any): Promise<URLSearchParams> => new URLSearchParams(await brutDe(req));
+/** ⚠️ Ne lève jamais : un corps illisible est un corps vide, pas un 500. */
+const jsonDe = async (req: any): Promise<Record<string, any>> => {
+  try { const o = JSON.parse(await brutDe(req)); return (o && typeof o === 'object') ? o : {}; }
+  catch { return {}; }
 };
 
 /**
@@ -69,6 +101,33 @@ export const serveur = createServer(async (req, res) => {
     if (m === 'GET' && p === '/sante') return json(res, { ok: true, at: new Date().toISOString() });
 
     /**
+     * ⭐⭐ LA ROUTE QUE LE MIDDLEWARE DE veve-sites ATTEND DEPUIS LE LOT 42.
+     *
+     *     GET /session/<sid>  ->  { "palier": "member" }
+     *
+     * 🔴 ELLE EST **PUBLIQUE**, ET TRAITÉE ICI, AVANT `/api/`. Deux raisons
+     *    qui n'ont rien à voir l'une avec l'autre :
+     *
+     *  1. Le middleware n'envoie pas `x-service` — il n'a aucun secret à
+     *     porter, c'est un processus qui rend des pages. Ce qui protège
+     *     cette lecture, c'est que le `sid` est tiré sur 256 bits.
+     *  2. Elle ne rend QUE le palier. Un palier n'identifie personne. Le
+     *     jour où on lui fera rendre l'adresse « pour afficher le nom dans
+     *     l'en-tête », il faudra la fermer — parce qu'elle cessera de ne
+     *     rien révéler.
+     *
+     * ⚠️ Un `sid` inconnu rend **404 avec un corps JSON**, pas une page
+     *    HTML : le middleware lit `r.ok` puis `r.json()`, et une
+     *    redirection vers l'accueil lui donnerait du HTML à parser.
+     */
+    if (m === 'GET' && p.startsWith('/session/')) {
+      if (trop(REGLES.api)) return json(res, { erreur: 'trop de requêtes' }, 429);
+      const e = etatDeLaSession(decodeURIComponent(p.slice('/session/'.length)));
+      if (!e.palier) return json(res, { erreur: 'session inconnue' }, 404);
+      return json(res, { palier: e.palier });
+    }
+
+    /**
      * ⭐⭐ L'API DE SERVICE — ce que les JEUX appellent, jamais un navigateur.
      *
      * 🔴 Authentifiée par un secret partagé (`ID_SERVICE`), comparé à durée
@@ -82,8 +141,99 @@ export const serveur = createServer(async (req, res) => {
     if (p.startsWith('/api/')) {
       const fourni = String(req.headers['x-service'] ?? '');
       if (!cleService() || !memeSecret(fourni, cleService())) return json(res, { erreur: 'refusé' }, 401);
+
+      /**
+       * ⭐⭐ LES TROIS ROUTES DU LOT 90 — traitées AVANT `?compte=`.
+       *
+       * ⚠️ Le bloc d'origine lit `?compte=` et rend 404 s'il est absent.
+       *    Ces trois-là n'ont pas de compte à fournir : c'est justement
+       *    leur objet d'en trouver un. Posées plus bas, elles auraient
+       *    rendu « compte inconnu » sur une inscription parfaitement
+       *    valide — un 404 qui accuse la mauvaise chose.
+       */
+
+      /**
+       * L'inscription RELAYÉE. veveprice garde son formulaire, son thème
+       * et son domaine ; c'est lui qui appelle, côté serveur.
+       *
+       * 🔴 LA RÉPONSE EST LA MÊME DANS TOUS LES CAS — adresse neuve, déjà
+       *    inscrite, trop de demandes, envoi en panne. Le relais ne doit
+       *    RIEN pouvoir apprendre de plus qu'un visiteur : sinon la
+       *    précaution prise sur la page publique ne vaut plus rien, il
+       *    suffirait de regarder ce que le relais reçoit.
+       */
+      if (m === 'POST' && p === '/api/inscription') {
+        if (trop(REGLES.verifier)) return json(res, { erreur: 'trop de demandes' }, 429);
+        const b = await jsonDe(req);
+        const email = String(b.email ?? '');
+        const retourDemande = String(b.retour ?? '');
+        const site = String(b.site ?? '');
+
+        /**
+         * 🔴 LE MÊME CONTRÔLE QUE POUR LES JEUX, ET POUR LA MÊME RAISON.
+         *    Sans lui, quiconque connaît `ID_SERVICE` ferait envoyer, à
+         *    l'adresse de son choix, un courriel à notre nom dont le lien
+         *    ramène chez lui. `retourAutorise()` compare des ORIGINES,
+         *    pas des préfixes.
+         */
+        let retour: string | null = null;
+        if (retourDemande) {
+          if (!jeuConnu(site) || !retourAutorise(site, retourDemande))
+            return json(res, { erreur: 'adresse de retour refusée' }, 400);
+          retour = retourDemande;
+        }
+        if (!urlPublique()) {
+          console.error('[inscription] URL_PUBLIQUE absente : aucun lien ne peut être fabriqué.');
+          return json(res, { erreur: 'service indisponible' }, 503);
+        }
+        const d = demander(email, { retour });
+        if (d.erreur && !d.jeton && d.erreur.startsWith('Cette adresse'))
+          return json(res, { erreur: 'adresse invalide' }, 400);
+        if (d.jeton) {
+          const lien = `${urlPublique()}/entrer-par-lien?j=${encodeURIComponent(d.jeton)}`;
+          const neuf = !lireCompteParEmail(email);
+          const bilan = await envoyer(courrielDeConnexion(email.trim().toLowerCase(), lien, DUREE_MIN, neuf));
+          if (!bilan.ok) console.error(`[inscription] envoi refusé : ${bilan.pourquoi}`);
+          else console.log(`[inscription] lien envoyé (relais${site ? ' ' + site : ''})${bilan.simule ? ' SIMULÉ' : ''}`);
+        } else console.warn(`[inscription] lien non fabriqué : ${d.erreur}`);
+        return json(res, { ok: true });
+      }
+
+      /**
+       * L'ÉCHANGE. Le code arrive par l'URL du navigateur, mais il est
+       * échangé ICI, de serveur à serveur : le `sid` ne traverse jamais un
+       * navigateur autrement que dans un cookie `HttpOnly`.
+       */
+      if (m === 'POST' && p === '/api/echange') {
+        if (trop(REGLES.api)) return json(res, { erreur: 'trop de requêtes' }, 429);
+        const b = await jsonDe(req);
+        const e = echanger(String(b.code ?? ''));
+        if (!e.sid) return json(res, { erreur: e.pourquoi ?? 'code invalide' }, 400);
+        return json(res, { sid: e.sid, palier: e.palier, compte: e.compte, email: e.email });
+      }
+
+      /**
+       * ⭐ LA DÉCONNEXION EST UNE RÉVOCATION, PAS UN COOKIE EFFACÉ. Effacer
+       *    le cookie côté site laisse la session ouverte chez nous : elle
+       *    rouvrirait pour qui aurait copié le `sid`. On ferme à la source.
+       */
+      if (m === 'POST' && p === '/api/deconnexion') {
+        const b = await jsonDe(req);
+        return json(res, { ok: revoquer(String(b.sid ?? '')) });
+      }
+
       const c = lireCompte(url.searchParams.get('compte') ?? '');
-      if (!c || !c.verifie) return json(res, { erreur: 'compte inconnu' }, 404);
+      /**
+       * 🔴 CORRIGÉ AU LOT 89 : le contrôle était `!c || !c.verifie`.
+       *    `verifie` dit « le PORTEFEUILLE est prouvé », pas « le compte
+       *    est valide » — depuis que l'inscription se fait par courriel,
+       *    un membre parfaitement légitime a `verifie = 0`, et l'API
+       *    répondait « compte inconnu » sur un compte qu'elle venait de
+       *    lire. On sépare donc les deux questions.
+       */
+      if (!c) return json(res, { erreur: 'compte inconnu' }, 404);
+      if (p === '/api/avoirs' && !c.verifie)
+        return json(res, { erreur: 'portefeuille non vérifié' }, 409);
       if (p === '/api/avoirs') return json(res, {
         compte: c.id, wallet: c.wallet,
         abonne: estAbonne(c) ? c.abonne_jusqu_a : null,
@@ -91,8 +241,18 @@ export const serveur = createServer(async (req, res) => {
         avoirs: avoirsDe(c.id),
         sync: dernierSync(c.id) ?? null,
       });
+      /**
+       * ⭐ `palier` est ajouté ici (lot 89) parce que c'est CE service qui
+       *    connaît l'abonnement. Le middleware de veve-sites attend un
+       *    palier ; le lui faire déduire de `abonne` ailleurs, ce serait
+       *    écrire la même règle à deux endroits — et le jour où un palier
+       *    s'ajoute, seul l'un des deux le saurait.
+       *
+       * ⛔ On garde `abonne` : un consommateur existant ne doit pas casser.
+       */
       if (p === '/api/compte') return json(res, {
-        compte: c.id, wallet: c.wallet,
+        compte: c.id, wallet: c.wallet, email: c.email,
+        palier: paliDe(c),
         abonne: estAbonne(c) ? c.abonne_jusqu_a : null, supprime: !!c.supprime_le,
       });
       return json(res, { erreur: 'route inconnue' }, 404);
@@ -133,9 +293,111 @@ export const serveur = createServer(async (req, res) => {
       if (!isWallet(wallet))
         return html(res, accueil(undefined, 'Adresse invalide : elle commence par 0x et fait 42 caractères.'), 400);
       const c = creerOuLireCompte(wallet);
+      /**
+       * ⚠️ `Secure` AJOUTÉ AU LOT 89. Il manquait ici alors qu'il est
+       *    présent dans `poserCookie()` (session.ts) depuis le début :
+       *    cette route posait donc un cookie de session que le navigateur
+       *    accepte de renvoyer en clair sur une requête http. Défaut
+       *    préexistant, sans rapport avec l'inscription — trouvé en
+       *    comparant les deux endroits qui posent le même cookie.
+       */
       return vers(res, c.verifie ? '/compte' : '/choisir', {
-        'set-cookie': `${COOKIE}=${creerJeton(c.id)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`,
+        'set-cookie': `${COOKIE}=${creerJeton(c.id)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000; Secure`,
       });
+    }
+
+    /**
+     * ⭐⭐ L'INSCRIPTION PAR COURRIEL — placée ICI, et l'endroit compte.
+     *
+     * 🔴 Trois lignes plus bas commence le mur « pas de session ⇒ retour à
+     *    l'accueil ». Une route d'inscription posée APRÈS ce mur serait
+     *    inatteignable par la seule personne à qui elle s'adresse : celle
+     *    qui n'a pas encore de compte. Le symptôme aurait été une
+     *    redirection vers `/`, donc « le formulaire ne fait rien ».
+     */
+    if (m === 'POST' && p === '/inscription') {
+      /**
+       * ⚠️ DEUX LIMITEURS, PAS UN. Celui-ci est par adresse IP ; celui de
+       *    `lien_magique.demander()` est par adresse e-mail. Le premier
+       *    protège notre quota d'envoi, le second empêche de harceler
+       *    quelqu'un dont on connaît l'adresse — un seul des deux laisse
+       *    l'autre attaque ouverte.
+       */
+      if (trop(REGLES.verifier))
+        return html(res, accueil(undefined, 'Trop de demandes depuis cette connexion. Patientez quelques minutes.'), 429);
+      const b = await corpsDe(req);
+      const email = String(b.get('email') ?? '');
+
+      if (!urlPublique()) {
+        console.error('[inscription] URL_PUBLIQUE absente : aucun lien ne peut être fabriqué.');
+        return html(res, accueil(undefined, 'L’inscription est momentanément indisponible.'), 500);
+      }
+
+      const d = demander(email);
+      /**
+       * 🔴 MÊME RÉPONSE DANS TOUS LES CAS — succès, adresse déjà inscrite,
+       *    trop de demandes pour cette adresse, envoi en panne. Seule
+       *    l'adresse manifestement impossible reçoit une vraie erreur, et
+       *    elle ne renseigne sur personne.
+       *
+       * ⭐ Le coût est réel : Preda ne verra pas dans son navigateur qu'un
+       *    envoi a échoué. C'est pour ça que l'échec est JOURNALISÉ avec sa
+       *    phrase d'origine — l'information existe, elle est juste au bon
+       *    endroit.
+       */
+      if (d.erreur && !d.jeton && d.erreur.startsWith('Cette adresse'))
+        return html(res, accueil(undefined, d.erreur), 400);
+
+      if (d.jeton) {
+        const lien = `${urlPublique()}/entrer-par-lien?j=${encodeURIComponent(d.jeton)}`;
+        const neuf = !lireCompteParEmail(email);
+        const bilan = await envoyer(courrielDeConnexion(email.trim().toLowerCase(), lien, DUREE_MIN, neuf));
+        if (!bilan.ok) console.error(`[inscription] envoi refusé : ${bilan.pourquoi}`);
+        else console.log(`[inscription] lien envoyé${bilan.simule ? ' (SIMULÉ)' : ''}${bilan.id ? ` — ${bilan.id}` : ''}`);
+      } else {
+        console.warn(`[inscription] lien non fabriqué : ${d.erreur}`);
+      }
+      return html(res, pageLienEnvoye(DUREE_MIN));
+    }
+
+    /**
+     * ⭐ LA CONSOMMATION DU LIEN. C'est le seul endroit du service où une
+     *    session naît sans portefeuille.
+     *
+     * ⚠️ Le jeton voyage dans l'URL — il n'y a pas d'autre façon de le
+     *    mettre dans un courriel. Il est donc court (quinze minutes) ET à
+     *    usage unique, et on NETTOIE l'URL par une redirection dès qu'il a
+     *    servi : sans ça il resterait dans l'historique du navigateur et
+     *    dans l'en-tête `Referer` de chaque lien cliqué depuis la page.
+     */
+    if (m === 'GET' && p === '/entrer-par-lien') {
+      if (trop(REGLES.verifier))
+        return html(res, accueil(undefined, 'Trop de tentatives. Patientez quelques minutes.'), 429);
+      const v = consommer(url.searchParams.get('j') ?? '');
+      if (!v.email) return html(res, accueil(undefined, v.pourquoi), 400);
+      const c = creerOuLireCompteParEmail(v.email);
+      const cookie = `${COOKIE}=${creerJeton(c.id)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000; Secure`;
+
+      /**
+       * ⭐⭐ LE RETOUR VERS LE SITE QUI A INSCRIT LA PERSONNE (lot 90).
+       *
+       * ⚠️ On NE remet PAS `retourAutorise()` ici. L'adresse a été
+       *    contrôlée au moment de la demande, avant d'être écrite. La
+       *    revérifier donnerait deux endroits où la même règle peut
+       *    diverger ; et c'est toujours celui qu'on a oublié qui sert.
+       *    Ce qui compte, c'est qu'AUCUN chemin n'écrive `retour` sans
+       *    l'avoir contrôlé — il n'y en a qu'un, dans `/api/inscription`.
+       *
+       * ⭐ On pose QUAND MÊME le cookie veveid : la personne peut revenir
+       *    plus tard sur `/compte` pour vérifier son portefeuille, sans
+       *    redemander un lien.
+       */
+      if (v.retour) {
+        const u = new URL(v.retour);
+        u.searchParams.set('code', creerCode(c.id));
+        return vers(res, u.toString(), { 'set-cookie': cookie });
+      }
+      return vers(res, '/compte', { 'set-cookie': cookie });
     }
 
     const compte = compteId ? lireCompte(compteId) : undefined;
@@ -144,9 +406,41 @@ export const serveur = createServer(async (req, res) => {
     if (m === 'GET' && p === '/deconnexion')
       return vers(res, '/', { 'set-cookie': `${COOKIE}=; Path=/; Max-Age=0` });
 
+    /**
+     * ⭐ Lier un portefeuille APRÈS coup, depuis « Mon compte ». C'est la
+     *    seule façon pour un membre inscrit par courriel d'entrer dans le
+     *    parcours de vérification, qui part du portefeuille.
+     */
+    if (m === 'POST' && p === '/lier-portefeuille') {
+      if (compte.verifie) return vers(res, '/compte');
+      if (trop(REGLES.verifier))
+        return vers(res, '/compte?msg=' + encodeURIComponent('Trop de tentatives. Patientez quelques minutes.'));
+      const b = await corpsDe(req);
+      const w = String(b.get('wallet') ?? '').trim().toLowerCase();
+      if (!isWallet(w))
+        return vers(res, '/compte?msg=' + encodeURIComponent('Adresse invalide : elle commence par 0x et fait 42 caractères.'));
+      /**
+       * ⚠️ On refuse AVANT d'écrire si un autre compte porte déjà ce
+       *    portefeuille et a quelque chose à perdre. `lier()` refait ce
+       *    contrôle au moment de la preuve — les deux sont utiles : ici on
+       *    évite de faire mettre deux collectibles en vente pour rien.
+       */
+      const occupe = portefeuilleOccupe(w, compte.id);
+      if (occupe) return vers(res, '/compte?msg=' + encodeURIComponent('Ce portefeuille est déjà lié à un autre compte.'));
+      poserPortefeuille(compte.id, w);
+      return vers(res, '/choisir');
+    }
+
     // ── La vérification ─────────────────────────────────────────────────
     if (m === 'GET' && p === '/choisir') {
       if (compte.verifie) return vers(res, '/compte');
+      /**
+       * 🔴 SANS PORTEFEUILLE, IL N'Y A RIEN À VÉRIFIER. `preparer(null)`
+       *    serait parti lire la chaîne pour une adresse vide — une requête
+       *    à l'explorateur, sur notre quota, pour une réponse qui ne peut
+       *    qu'être vide. On renvoie à la page qui pose la question.
+       */
+      if (!compte.wallet) return vers(res, '/compte');
       if (defiActif(compte.wallet)) return vers(res, '/verification');
       if (trop(REGLES.verifier)) return html(res, pageChoisir({}, 'Trop de lectures. Patientez une minute.'), 429);
       const e = await preparer(compte.wallet);
@@ -154,6 +448,7 @@ export const serveur = createServer(async (req, res) => {
     }
     if (m === 'POST' && p === '/choisir') {
       if (compte.verifie) return vers(res, '/compte');
+      if (!compte.wallet) return vers(res, '/compte');
       const b = await corpsDe(req);
       const { defi, erreur } = await creerDefi(compte.wallet, compte.id, b.getAll('t').slice(0, NB_CIBLES + 4));
       if (erreur || !defi) return html(res, pageChoisir(await preparer(compte.wallet), erreur), 400);
@@ -161,6 +456,7 @@ export const serveur = createServer(async (req, res) => {
     }
     if (m === 'GET' && p === '/verification') {
       if (compte.verifie) return vers(res, '/compte');
+      if (!compte.wallet) return vers(res, '/compte');
       const d = defiActif(compte.wallet);
       if (!d) return vers(res, '/choisir');
       return html(res, pageDefi(avancement(d), d.id));
@@ -185,7 +481,20 @@ export const serveur = createServer(async (req, res) => {
      *    jeton n'ouvre plus rien ensuite.
      */
     if (m === 'GET' && p === '/apres') {
-      if (!compte.verifie) return vers(res, '/choisir');
+      /**
+       * ⛔ ON NE TOUCHE PAS AU CONTRAT DES JEUX DANS CE LOT. `verifier()`
+       *    (jetons.ts) exige `compte` ET `wallet` dans la charge : émettre
+       *    un jeton sans portefeuille produirait un « charge incomplète »
+       *    côté jeu, c'est-à-dire une porte fermée sans explication.
+       *
+       *    Un membre sans portefeuille qui arrive par un jeu doit donc
+       *    d'abord en vérifier un — et c'est cohérent : un jeu qui fait
+       *    combattre des collectibles a besoin de savoir lesquels sont à
+       *    lui. Le jour où veveprice voudra faire entrer un membre SANS
+       *    portefeuille, ce sera une décision sur la forme du jeton, pas
+       *    un assouplissement glissé ici.
+       */
+      if (!compte.verifie) return vers(res, compte.wallet ? '/choisir' : '/compte');
       const dest = lireDest(req);
       if (!dest) return vers(res, '/compte');
       if (!clePrivee()) return html(res, page('Identité', '<p>Service mal configuré : ID_PRIVEE absente.</p>'), 500);
@@ -201,7 +510,21 @@ export const serveur = createServer(async (req, res) => {
 
     // ── Le compte ───────────────────────────────────────────────────────
     if (m === 'GET' && p === '/compte' || (m === 'GET' && p === '/')) {
-      if (!compte.verifie) return vers(res, '/choisir');
+      /**
+       * 🔴🔴 C'ÉTAIT ICI LE MUR, ET C'EST ICI QU'IL TOMBE (lot 89).
+       *
+       * L'ancienne ligne était `if (!compte.verifie) return vers('/choisir')`.
+       * Pour un membre inscrit par courriel, elle envoyait vers une page
+       * qui demande un portefeuille qu'il n'a pas — et `/choisir` renvoie
+       * maintenant vers `/compte` : une BOUCLE de redirections, sur la
+       * première page que voit un nouvel inscrit.
+       *
+       * ⭐ La règle décidée : « une invitation, jamais un mur ». Un compte
+       *    sans portefeuille voit son compte, et la proposition de le
+       *    vérifier. Un compte QUI A un portefeuille non encore prouvé est
+       *    au milieu du parcours : lui, on le ramène où il en était.
+       */
+      if (!compte.verifie && compte.wallet) return vers(res, '/choisir');
       const dest = lireDest(req);
       return html(res, pageCompte(
         compte, avoirsDe(compte.id), estAbonne(compte), dernierSync(compte.id),
@@ -215,8 +538,18 @@ export const serveur = createServer(async (req, res) => {
         ? 'La chaîne ne répond pas. Rien n’a été touché.'
         : `${b.vus} collectibles lus, ${b.nouveaux} nouveaux${b.partis ? `, ${b.partis} partis` : ''}${b.complet ? '' : ' — vue partielle, rien retiré'}.`));
     }
-    if (m === 'POST' && p === '/supprimer')
-      return vers(res, '/compte?msg=' + encodeURIComponent(demanderSuppression(compte.id).message));
+    if (m === 'POST' && p === '/supprimer') {
+      const bilan = demanderSuppression(compte.id);
+      /**
+       * ⭐ On ferme AUSSI les sessions ouvertes sur les sites. Sans ça, la
+       *    personne « supprime son compte » et reste connectée sur
+       *    veveprice — `etatDeLaSession()` refuse déjà un compte marqué
+       *    supprimé, mais fermer explicitement vaut mieux que compter sur
+       *    un contrôle situé ailleurs.
+       */
+      if (bilan.ok) revoquerTout(compte.id);
+      return vers(res, '/compte?msg=' + encodeURIComponent(bilan.message));
+    }
     if (m === 'POST' && p === '/annuler-suppression')
       return vers(res, '/compte?msg=' + encodeURIComponent(annulerSuppression(compte.id).message));
 
@@ -238,7 +571,7 @@ export function demarrer(port = PORT): void {
     console.log(`[identité] jeux déclarés : ${j.length ? j.join(', ') : 'AUCUN — variable JEUX vide'}`);
     // (clés et ID_SERVICE : dits par annoncerDemarrage() ci-dessus)
     const menage = setInterval(() => {
-      purgerSeaux(); purgerDefis();
+      purgerSeaux(); purgerDefis(); purgerLiens(); purgerSessions();
       const n = purgerComptes();
       if (n) console.log(`[identité] ${n} compte(s) effacé(s) après le délai de grâce.`);
     }, 3600_000);

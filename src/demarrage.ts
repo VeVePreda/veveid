@@ -172,7 +172,48 @@ export function controlerDemarrage(): Constat[] {
     });
   }
 
-  // ── 4. LA SESSION ────────────────────────────────────────────────────
+  // ── 4. L'INSCRIPTION PAR COURRIEL (lot 89) ───────────────────────────
+  /**
+   * ⭐⭐ CES DEUX MANQUES SONT SILENCIEUX EN PRODUCTION, ET C'EST POURQUOI
+   *     ILS SONT ICI.
+   *
+   * Sans `URL_PUBLIQUE`, le formulaire d'inscription rend une erreur
+   * générique et le journal seul dit pourquoi. Sans `BREVO_CLE`, la page
+   * « vérifiez vos e-mails » s'affiche exactement pareil — puisqu'elle est
+   * volontairement identique dans tous les cas — et personne ne reçoit
+   * jamais rien. Le seul endroit où la panne peut se voir AVANT qu'un
+   * visiteur la subisse, c'est ce cadre-là.
+   */
+  if (!process.env.URL_PUBLIQUE) {
+    c.push({
+      gravite: 'grave',
+      titre: "URL_PUBLIQUE absente : AUCUN LIEN DE CONNEXION NE PEUT ETRE FABRIQUE",
+      detail: "L'inscription par e-mail repondra 'momentanement indisponible'. "
+        + "⛔ On ne se rabat PAS sur l'en-tete Host : il est ecrit par l'appelant, "
+        + "et le lien partirait vers le serveur de qui le demande. "
+        + "Posez URL_PUBLIQUE=https://id.digitalcollectible.net (sans barre finale).",
+    });
+  }
+  if (!process.env.BREVO_CLE && process.env.COURRIEL_SIMULE !== '1') {
+    c.push({
+      gravite: 'grave',
+      titre: 'BREVO_CLE absente : AUCUN COURRIEL NE PARTIRA',
+      detail: "La page 'verifiez vos e-mails' s'affichera quand meme — elle est identique "
+        + "dans tous les cas, expres — et personne ne recevra rien. "
+        + "Cle API v3 dans Brevo > SMTP & API > Cles API (elle commence par xkeysib-). "
+        + "L'expediteur doit etre sur un domaine authentifie : mail.veveprice.com.",
+    });
+  }
+  if (process.env.COURRIEL_SIMULE === '1') {
+    c.push({
+      gravite: 'attention',
+      titre: 'COURRIEL_SIMULE=1 : les liens de connexion sont ECRITS DANS LE JOURNAL',
+      detail: "Aucun courriel ne part, et chaque lien s'affiche en clair dans les logs — "
+        + "donc lisible par quiconque y a acces. ⛔ A ne JAMAIS laisser en production.",
+    });
+  }
+
+  // ── 5. LA SESSION ────────────────────────────────────────────────────
   if (!process.env.SESSION_SECRET) {
     c.push({
       gravite: 'attention',

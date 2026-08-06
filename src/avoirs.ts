@@ -100,8 +100,23 @@ export async function synchroniser(
 // Le compte
 // ═════════════════════════════════════════════════════════════════════════
 
+/**
+ * ⭐⭐ UN COMPTE PEUT N'AVOIR QUE L'UN DES DEUX (lot 89).
+ *
+ *  - `email` sans `wallet`  : le cas le plus courant. Quelqu'un s'inscrit
+ *    pour suivre des prix. Il vaut `member`, il n'a rien à prouver.
+ *  - `wallet` sans `email`  : les comptes nés avant le lot 89, et le
+ *    parcours des jeux, qui part encore du portefeuille.
+ *  - les deux              : un membre qui a vérifié sa collection.
+ *
+ * 🔴 `verifie` NE VEUT PAS DIRE « COMPTE VALIDE ». Il veut dire « LE
+ *    PORTEFEUILLE EST PROUVÉ », et rien d'autre. Le lire comme un état du
+ *    compte ferait d'un membre parfaitement légitime un compte à moitié
+ *    ouvert — c'est précisément le mur qu'on est en train de retirer.
+ */
 export interface Compte {
-  id: string; wallet: string; verifie: number; verifie_le: string | null;
+  id: string; wallet: string | null; email: string | null;
+  verifie: number; verifie_le: string | null;
   cree_le: string; abonne_jusqu_a: string | null; supprime_le: string | null;
 }
 
@@ -114,7 +129,66 @@ export function creerOuLireCompte(wallet: string): Compte {
   return q1<Compte>('SELECT * FROM comptes WHERE id=?', id)!;
 }
 
+/**
+ * La porte d'entrée par e-mail. Symétrique de `creerOuLireCompte`, et
+ * volontairement aussi bête : on ne crée RIEN d'autre que la ligne.
+ *
+ * ⚠️ L'appelant a déjà normalisé l'adresse (`lien_magique.normaliser`).
+ *    On re-normalise quand même : cette fonction sera un jour appelée
+ *    depuis ailleurs, et un compte en double créé par une majuscule est
+ *    invisible jusqu'au jour où la personne ne retrouve plus ses données.
+ */
+export function creerOuLireCompteParEmail(email: string): Compte {
+  const e = email.trim().toLowerCase();
+  const existant = q1<Compte>('SELECT * FROM comptes WHERE email=?', e);
+  if (existant) return existant;
+  const id = randomUUID();
+  run('INSERT INTO comptes (id, email, cree_le) VALUES (?,?,?)', id, e, now());
+  return q1<Compte>('SELECT * FROM comptes WHERE id=?', id)!;
+}
+
+export const lireCompteParEmail = (email: string) =>
+  q1<Compte>('SELECT * FROM comptes WHERE email=?', email.trim().toLowerCase());
+
+/** ⭐ Le palier, en un seul endroit. Voir `access.mjs` côté veve-sites. */
+export const paliDe = (c: Compte | undefined) =>
+  !c ? 'visitor' : estAbonne(c) ? 'crevette' : 'member';
+
 export const lireCompte = (id: string) => q1<Compte>('SELECT * FROM comptes WHERE id=?', id);
+
+/**
+ * ⭐⭐ « CE PORTEFEUILLE APPARTIENT-IL DÉJÀ À QUELQU'UN ? »
+ *
+ * ⚠️ « Une ligne existe avec ce portefeuille » et « quelqu'un le détient »
+ *    sont DEUX QUESTIONS. L'ancienne porte `/entrer` créait la ligne avant
+ *    toute preuve : une adresse tapée puis abandonnée laisse une trace qui
+ *    n'appartient à personne. La traiter comme une propriété reviendrait à
+ *    laisser n'importe qui réserver le portefeuille d'un autre en le
+ *    tapant une fois — et le vrai détenteur serait refusé pour toujours.
+ *
+ * On répond donc « oui » seulement si l'autre compte a quelque chose à
+ * perdre : une preuve faite (`verifie`) ou une adresse e-mail.
+ */
+export const portefeuilleOccupe = (wallet: string, saufCompteId: string): boolean => {
+  const autre = q1<{ verifie: number; email: string | null }>(
+    'SELECT verifie, email FROM comptes WHERE wallet=? AND id<>?', wallet.trim().toLowerCase(), saufCompteId);
+  return !!autre && (autre.verifie === 1 || !!autre.email);
+};
+
+/**
+ * Pose le portefeuille sur un compte, AVANT toute preuve. ⛔ Il n'écrit
+ * PAS `verifie` : seule la preuve de propriété (`defi.lier`) a le droit de
+ * le faire. Un raccourci ici transformerait « j'ai tapé une adresse » en
+ * « je la détiens », ce que ce service entier existe pour distinguer.
+ */
+export function poserPortefeuille(compteId: string, wallet: string): void {
+  const w = wallet.trim().toLowerCase();
+  // La trace abandonnée d'un compte sans valeur cède la place (voir defi.lier).
+  const autre = q1<{ id: string }>(
+    'SELECT id FROM comptes WHERE wallet=? AND id<>? AND verifie=0 AND email IS NULL', w, compteId);
+  if (autre) run('UPDATE comptes SET wallet=NULL WHERE id=?', autre.id);
+  run('UPDATE comptes SET wallet=? WHERE id=?', w, compteId);
+}
 export const estAbonne = (c: Compte) => !!c.abonne_jusqu_a && c.abonne_jusqu_a > now();
 
 export function accorderAbonnement(compteId: string, jours: number): string {

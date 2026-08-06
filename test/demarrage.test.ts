@@ -17,7 +17,7 @@ import { sousData, estUnMontage, controlerDemarrage, type Constat } from '../src
 /** Pose un environnement propre, joue, et remet tout en place. */
 function avec(env: Record<string, string | undefined>, f: () => void): void {
   const cles = ['DB_PATH', 'EXIGER_VOLUME', 'ID_PRIVEE', 'ID_PUBLIQUE',
-    'ID_SERVICE', 'JEUX', 'SESSION_SECRET'];
+    'ID_SERVICE', 'JEUX', 'SESSION_SECRET', 'URL_PUBLIQUE', 'BREVO_CLE', 'COURRIEL_SIMULE'];
   const avant = Object.fromEntries(cles.map((k) => [k, process.env[k]]));
   for (const k of cles) delete process.env[k];
   for (const [k, v] of Object.entries(env)) if (v !== undefined) process.env[k] = v;
@@ -32,12 +32,24 @@ const graves = (c: Constat[]) => c.filter((x) => x.gravite === 'grave');
 const contient = (c: Constat[], mot: string) =>
   c.some((x) => x.titre.includes(mot) || x.detail.includes(mot));
 
-/** Un environnement complet et correct : le contrôle doit être MUET. */
+/**
+ * Un environnement complet et correct : le contrôle doit être MUET.
+ *
+ * ⭐⭐ CE QUE « COMPLET » VEUT DIRE A CHANGÉ AU LOT 89, et c'est pour ça
+ *     que ces deux lignes sont ajoutées ICI plutôt qu'ailleurs.
+ *
+ * Trois bancs sont tombés en rouge le jour où l'inscription par courriel a
+ * été ajoutée. La réparation tentante était de relâcher l'attente
+ * (« ignorons les nouveaux constats ») — c'est précisément le geste qui
+ * rend un banc muet. L'attente se LIT : une installation complète inclut
+ * désormais de quoi envoyer un courriel, donc `BON` le dit.
+ */
 const BON = {
   EXIGER_VOLUME: '0',
   ID_PRIVEE: 'x', ID_PUBLIQUE: 'y', ID_SERVICE: 'z',
   JEUX: 'loop=https://loop.example.net',
   SESSION_SECRET: 'long',
+  URL_PUBLIQUE: 'https://id.example.net', BREVO_CLE: 'xkeysib-essai',
 };
 
 test('sousData compare des SEGMENTS, pas des caractères', () => {
@@ -108,5 +120,49 @@ test('ID_SERVICE et SESSION_SECRET absents : attention, jamais grave', () => {
     const c = controlerDemarrage();
     assert.deepEqual(graves(c), [], 'ces deux-là gênent, ils n’empêchent pas de servir');
     assert.equal(c.filter((x) => x.gravite === 'attention').length, 2);
+  });
+});
+
+
+// ═════════════════════════════════════════════════════════════════════════
+// L'inscription par courriel (lot 89)
+// ═════════════════════════════════════════════════════════════════════════
+
+/**
+ * 🔴 CES DEUX MANQUES SONT INVISIBLES DEPUIS UN NAVIGATEUR. La page
+ *    « vérifiez vos e-mails » est identique dans tous les cas — c'est
+ *    voulu, elle ne doit pas dire si l'adresse existe. Conséquence :
+ *    sans ces constats, une inscription qui n'envoie jamais rien
+ *    ressemble EXACTEMENT à une inscription qui marche.
+ */
+test('URL_PUBLIQUE absente : GRAVE, et le message refuse le repli sur Host', () => {
+  const d = mkdtempSync(join(tmpdir(), 'id-'));
+  avec({ ...BON, URL_PUBLIQUE: undefined, DB_PATH: join(d, 'veve-id.db') }, () => {
+    const c = controlerDemarrage();
+    assert.equal(graves(c).length, 1);
+    assert.equal(contient(c, 'URL_PUBLIQUE'), true);
+    assert.equal(contient(c, 'Host'), true,
+      'le message doit dire POURQUOI on ne se rabat pas sur l’en-tête Host');
+  });
+});
+
+test('BREVO_CLE absente : GRAVE, et le message donne où la chercher', () => {
+  const d = mkdtempSync(join(tmpdir(), 'id-'));
+  avec({ ...BON, BREVO_CLE: undefined, DB_PATH: join(d, 'veve-id.db') }, () => {
+    const c = controlerDemarrage();
+    assert.equal(graves(c).length, 1);
+    assert.equal(contient(c, 'xkeysib-'), true, 'le geste exact, pas seulement le constat');
+    assert.equal(contient(c, 'mail.veveprice.com'), true,
+      'l’expéditeur doit être sur un domaine authentifié : le dire ici évite un 400 Brevo');
+  });
+});
+
+test('COURRIEL_SIMULE=1 se signale, même sans clé — un repli muet n’en est pas un', () => {
+  const d = mkdtempSync(join(tmpdir(), 'id-'));
+  avec({ ...BON, BREVO_CLE: undefined, COURRIEL_SIMULE: '1', DB_PATH: join(d, 'veve-id.db') }, () => {
+    const c = controlerDemarrage();
+    assert.deepEqual(graves(c), [], 'la simulation est un choix explicite, pas une panne');
+    assert.equal(contient(c, 'ECRITS DANS LE JOURNAL'), true,
+      'un mode qui écrit des secrets dans les logs doit le DIRE');
   });
 });

@@ -73,15 +73,56 @@ export function accueil(jeu?: string, erreur?: string): string {
     <p class="doux">Vous prouvez que vous détenez vos collectibles <b>une seule fois</b>.
     Tous les jeux, présents et à venir, s’appuient dessus.</p>
   </div>
+  <form method="post" action="/inscription">
+    <div class="carte">
+      <label for="email"><b>Votre adresse e-mail</b></label>
+      <p class="doux" style="margin:4px 0 10px">Nous vous envoyons un lien. Pas de mot de passe
+      à choisir, donc pas de mot de passe à perdre.</p>
+      <input id="email" name="email" type="email" placeholder="vous@exemple.fr" inputmode="email"
+        autocapitalize="off" autocomplete="email" spellcheck="false" required>
+      <p style="margin:12px 0 0"><button class="principal">Recevoir mon lien</button></p>
+    </div>
+  </form>
+
+  <h2>Vous avez un portefeuille VeVe ?</h2>
   <form method="post" action="/entrer">
     <div class="carte">
+      <p class="doux" style="margin-top:0">Vous pouvez aussi entrer directement par votre adresse
+      de portefeuille. Vous prouverez ensuite qu’elle est bien la vôtre.</p>
       <input name="wallet" placeholder="0x…" inputmode="text" autocapitalize="off"
         autocomplete="off" spellcheck="false" required>
-      <p style="margin:12px 0 0"><button class="principal">Continuer</button></p>
+      <p style="margin:12px 0 0"><button>Continuer avec mon portefeuille</button></p>
     </div>
   </form>
   <p class="doux">Nous ne demandons jamais vos identifiants VeVe, et il n’y a rien à signer :
   votre adresse est publique, elle ne prouve rien à elle seule.</p>`);
+}
+
+/**
+ * ⭐ « Regardez vos e-mails » — et RIEN D'AUTRE.
+ *
+ * 🔴 CETTE PAGE EST LA MÊME QUE L'ADRESSE EXISTE OU NON, que le compte
+ *    soit neuf ou ancien, et même si l'envoi a échoué. Une page qui
+ *    dirait « compte créé » d'un côté et « content de vous revoir » de
+ *    l'autre transformerait le formulaire en outil pour savoir qui est
+ *    inscrit — sur un site public, avec une liste d'adresses achetée,
+ *    c'est une fuite à l'échelle.
+ *
+ * ⚠️ On n'affiche même pas l'adresse saisie : elle serait dans l'URL ou
+ *    dans le HTML, donc dans l'historique et le journal du proxy.
+ */
+export function pageLienEnvoye(minutes: number): string {
+  return page('Vérifiez vos e-mails', `${entete('Vérifiez vos e-mails')}
+  <div class="ok"><b>C’est parti.</b> Si cette adresse peut recevoir du courrier, un lien de
+  connexion vient d’y être envoyé.</div>
+  <div class="carte">
+    <p style="margin-top:0">Ouvrez le message et cliquez sur le lien. Il est valable
+    <b>${minutes} minutes</b> et ne fonctionne qu’une seule fois.</p>
+    <p class="doux" style="margin-bottom:0">Rien n’arrive ? Regardez dans les indésirables, puis
+    <a href="/">réessayez</a> — vérifiez au passage qu’il n’y a pas de faute de frappe.</p>
+  </div>
+  <p class="doux">Vous pouvez fermer cette page : le lien fonctionne depuis n’importe quel
+  appareil, sur ce même navigateur ou un autre.</p>`);
 }
 
 export function pageChoisir(e: Eligibles, erreur?: string): string {
@@ -169,7 +210,14 @@ export function pageCompte(
     <span class="doux">${echapper(a.rarete ?? '')}</span>
   </div>`).join('') || '<p class="doux">Aucun collectible lu pour l’instant.</p>';
 
-  return page('Mon compte', `${entete('Mon compte', c.wallet.slice(0, 8) + '…')}
+  /**
+   * ⚠️ `c.wallet` PEUT ÊTRE NULL depuis le lot 89. L'ancien
+   *    `c.wallet.slice(0, 8)` faisait tomber la page entière — pas un
+   *    affichage vide : une exception, donc un 500, sur la page d'accueil
+   *    de tout membre inscrit par e-mail.
+   */
+  const coin = c.wallet ? c.wallet.slice(0, 8) + '…' : (c.email ?? '');
+  return page('Mon compte', `${entete('Mon compte', coin)}
   ${message ? `<div class="ok">${echapper(message)}</div>` : ''}
   ${c.supprime_le ? `<div class="err">
     <b>Suppression demandée.</b> Tout sera effacé ${DELAI_GRACE_JOURS} jours après le
@@ -181,11 +229,27 @@ export function pageCompte(
   ${jeu ? `<div class="ok"><b>${echapper(jeu)}</b> vous attend.
     <p style="margin:8px 0 0"><a href="/apres">Retourner au jeu →</a></p></div>` : ''}
 
-  <div class="carte">
+  ${c.email ? `<div class="carte">
+    <div class="rang"><b style="flex:1">Adresse e-mail</b></div>
+    <p class="doux" style="margin:8px 0 0">${echapper(c.email)}</p>
+  </div>` : ''}
+
+  ${c.wallet ? `<div class="carte">
     <div class="rang"><b style="flex:1">Portefeuille</b>
       <span class="doux">${c.verifie ? '✅ vérifié' : 'non vérifié'}</span></div>
     <p class="doux" style="margin:8px 0 0">${echapper(c.wallet)}</p>
-  </div>
+  </div>` : `<div class="carte">
+    <div class="rang"><b style="flex:1">Portefeuille VeVe</b>
+      <span class="doux">facultatif</span></div>
+    <p class="doux" style="margin:8px 0 12px">Vérifiez le vôtre pour retrouver vos collectibles
+    ici, recevoir des alertes sur <b>vos</b> pièces et apparaître au classement.
+    Votre compte fonctionne très bien sans.</p>
+    <form method="post" action="/lier-portefeuille">
+      <input name="wallet" placeholder="0x…" inputmode="text" autocapitalize="off"
+        autocomplete="off" spellcheck="false" required>
+      <p style="margin:12px 0 0"><button>Vérifier mon portefeuille VeVe</button></p>
+    </form>
+  </div>`}
 
   <div class="carte">
     <div class="rang"><b style="flex:1">Abonnement</b>
@@ -195,6 +259,7 @@ export function pageCompte(
       : 'Sans abonnement, vous recevez les notifications simples et jouez un héros par jeu.'}</p>
   </div>
 
+  ${!c.wallet ? '' : `
   <h2>Mes collectibles</h2>
   <form method="post" action="/synchroniser"><div class="carte">
     <p class="doux" style="margin-top:0">${avoirs.length} collectible(s).
@@ -203,7 +268,7 @@ export function pageCompte(
     <button>Relire la chaîne</button>
   </div></form>
   <div class="carte">${liste}
-    ${avoirs.length > 60 ? `<p class="doux">…et ${avoirs.length - 60} autres.</p>` : ''}</div>
+    ${avoirs.length > 60 ? `<p class="doux">…et ${avoirs.length - 60} autres.</p>` : ''}</div>`}
 
   <h2>Quitter</h2>
   <div class="carte">

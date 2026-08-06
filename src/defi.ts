@@ -302,10 +302,32 @@ export async function rafraichir(
  * dessein : constater et décider sont deux gestes, et seul le second
  * touche au compte.
  */
+/**
+ * 🔴🔴 CE CONTRÔLE REGARDE **TOUS** LES AUTRES COMPTES, PAS SEULEMENT LES
+ *      VÉRIFIÉS (corrigé au lot 89).
+ *
+ * L'ancienne version ne cherchait que `verifie=1`. Un compte NON vérifié
+ * portant déjà ce portefeuille — une tentative abandonnée par l'ancienne
+ * porte `/entrer`, qui créait la ligne avant toute preuve — passait donc au
+ * travers, et l'UPDATE suivant violait l'unicité de `wallet`. L'erreur
+ * remontée était une contrainte SQLite au milieu d'une vérification
+ * réussie : le plus mauvais moment possible, juste après que la personne a
+ * mis deux collectibles en vente et les a annulés.
+ *
+ * ⚠️ Ce défaut existait AVANT ce lot (la colonne était `UNIQUE NOT NULL`).
+ *    L'index unique partiel ne l'a pas créé, il l'a rendu visible.
+ *
+ * ⭐ Une trace abandonnée n'est pas un compte : une ligne sans e-mail et
+ *    sans preuve ne porte rien que quelqu'un puisse regretter. On l'efface.
+ *    Une ligne AVEC e-mail appartient à quelqu'un : on refuse, et on le dit.
+ */
 export function lier(compteId: string, wallet: string): { ok: boolean; message: string } {
   const w = wallet.toLowerCase();
-  const autre = q1<{ id: string }>('SELECT id FROM comptes WHERE wallet=? AND verifie=1 AND id<>?', w, compteId);
-  if (autre) return { ok: false, message: 'Ce portefeuille est déjà lié à un autre compte.' };
+  const autre = q1<{ id: string; verifie: number; email: string | null }>(
+    'SELECT id, verifie, email FROM comptes WHERE wallet=? AND id<>?', w, compteId);
+  if (autre && (autre.verifie === 1 || autre.email))
+    return { ok: false, message: 'Ce portefeuille est déjà lié à un autre compte.' };
+  if (autre) run('UPDATE comptes SET wallet=NULL WHERE id=?', autre.id);
   run('UPDATE comptes SET wallet=?, verifie=1, verifie_le=? WHERE id=?', w, now(), compteId);
   run('UPDATE defis SET compte_id=? WHERE wallet=? AND compte_id IS NULL', compteId, w);
   return { ok: true, message: 'Portefeuille vérifié. Vos collectibles sont à vous, et le jeu le sait.' };
