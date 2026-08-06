@@ -29,12 +29,35 @@ const CLE = () => process.env.BREVO_CLE ?? '';
  *    réponse possible sans changer l'expéditeur — pose-la le jour où une
  *    boîte humaine existe.
  *
- * ⚠️ L'expéditeur DOIT être sur un domaine authentifié chez Brevo
- *    (`mail.veveprice.com` l'est : SPF dédié, DKIM par le domaine de
- *    marque, Return-Path chez Brevo). Une adresse hors de ce domaine est
- *    refusée par l'API — 400, pas silencieusement.
+ * ═══════════════════════════════════════════════════════════════════════
+ * 🔴🔴 LE DÉFAUT ÉTAIT `noreply@mail.veveprice.com`, ET IL ÉTAIT FAUX.
+ * ═══════════════════════════════════════════════════════════════════════
+ * `mail.veveprice.com` n'est pas un domaine d'ENVOI : c'est le
+ * **Return-Path** de `veveprice.com`, le sous-domaine que Brevo demande de
+ * déléguer pour signer les rebonds. Le domaine authentifié — celui qui
+ * porte les DKIM `brevo1` et `brevo2` — est `veveprice.com` tout court.
+ *
+ * ⭐⭐⭐ UN DÉFAUT FAUX EST PIRE QU'UNE VARIABLE OBLIGATOIRE : il fait
+ * marcher le service assez pour qu'on le croie configuré. Aujourd'hui
+ * `BREVO_EXPEDITEUR` est posée dans Coolify, donc tout fonctionne, et
+ * personne ne verrait rien. Le jour d'un redéploiement ailleurs — un
+ * second environnement, une restauration, un `veveid` cloné pour un autre
+ * site — l'envoi partirait d'une adresse que Brevo refuse : la page dirait
+ * « vérifiez vos e-mails » (elle est identique dans tous les cas, exprès)
+ * et rien ne partirait jamais.
+ * ⭐ La règle qu'on en tire : un défaut de code doit être la valeur qu'on
+ * VOUDRAIT si la variable manquait, jamais celle qu'on avait sous les yeux
+ * en écrivant la ligne.
+ *
+ * ⚠️ L'expéditeur DOIT être sur un domaine authentifié chez Brevo. Une
+ *    adresse hors de ce domaine est refusée par l'API — 400, pas
+ *    silencieusement. `annoncerDemarrage()` AFFICHE désormais l'adresse
+ *    réellement utilisée, et d'où elle vient : sans ça, le seul moyen de
+ *    savoir laquelle partait était de faire un envoi et de le regarder
+ *    échouer.
  */
-export const expediteur = () => process.env.BREVO_EXPEDITEUR ?? 'noreply@mail.veveprice.com';
+export const EXPEDITEUR_DEFAUT = 'noreply@veveprice.com';
+export const expediteur = () => process.env.BREVO_EXPEDITEUR ?? EXPEDITEUR_DEFAUT;
 export const nomExpediteur = () => process.env.BREVO_NOM ?? 'VeVePrice';
 const reponseA = () => process.env.BREVO_REPONSE_A ?? '';
 

@@ -4,6 +4,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sousData, estUnMontage, controlerDemarrage, type Constat } from '../src/demarrage.ts';
+import { expediteur, EXPEDITEUR_DEFAUT } from '../src/courriel.ts';
 
 /**
  * ⭐ CE QUE CES TESTS PROTÈGENT.
@@ -17,7 +18,12 @@ import { sousData, estUnMontage, controlerDemarrage, type Constat } from '../src
 /** Pose un environnement propre, joue, et remet tout en place. */
 function avec(env: Record<string, string | undefined>, f: () => void): void {
   const cles = ['DB_PATH', 'EXIGER_VOLUME', 'ID_PRIVEE', 'ID_PUBLIQUE',
-    'ID_SERVICE', 'JEUX', 'SESSION_SECRET', 'URL_PUBLIQUE', 'BREVO_CLE', 'COURRIEL_SIMULE'];
+    'ID_SERVICE', 'JEUX', 'SESSION_SECRET', 'URL_PUBLIQUE', 'BREVO_CLE', 'COURRIEL_SIMULE',
+    // ⚠️ AJOUTÉES AU LOT 97, ET L'OUBLI AURAIT ÉTÉ SILENCIEUX : une variable
+    // absente de cette liste n'est pas effacée entre deux tests, donc le banc
+    // lit l'environnement de la MACHINE. Il passerait chez moi et tomberait en
+    // CI, ou l'inverse — et on chercherait dans le code.
+    'BREVO_EXPEDITEUR', 'BREVO_NOM'];
   const avant = Object.fromEntries(cles.map((k) => [k, process.env[k]]));
   for (const k of cles) delete process.env[k];
   for (const [k, v] of Object.entries(env)) if (v !== undefined) process.env[k] = v;
@@ -50,6 +56,11 @@ const BON = {
   JEUX: 'loop=https://loop.example.net',
   SESSION_SECRET: 'long',
   URL_PUBLIQUE: 'https://id.example.net', BREVO_CLE: 'xkeysib-essai',
+  // ⭐ AJOUTÉE AU LOT 97, pour la même raison que `BREVO_CLE` au lot 89 : une
+  // installation « complète » inclut désormais de quoi dire DEPUIS QUELLE
+  // ADRESSE on écrit. Relâcher l'attente à la place aurait rendu muet le seul
+  // constat qui parle quand tout va bien.
+  BREVO_EXPEDITEUR: 'noreply@essai.example',
 };
 
 test('sousData compare des SEGMENTS, pas des caractères', () => {
@@ -152,8 +163,16 @@ test('BREVO_CLE absente : GRAVE, et le message donne où la chercher', () => {
     const c = controlerDemarrage();
     assert.equal(graves(c).length, 1);
     assert.equal(contient(c, 'xkeysib-'), true, 'le geste exact, pas seulement le constat');
-    assert.equal(contient(c, 'mail.veveprice.com'), true,
+    // 🔴🔴 CE BANC AFFIRMAIT LE CONTRAIRE JUSQU'AU LOT 97 : il exigeait que le
+    // message nomme `mail.veveprice.com` comme domaine d'envoi. C'était FAUX —
+    // ce sous-domaine est le Return-Path, pas un domaine authentifié. Un test
+    // qui grave une erreur la rend impossible à corriger sans « casser » un
+    // banc vert : c'est la forme la plus coûteuse de dette, parce qu'elle se
+    // relit comme une garantie.
+    assert.equal(contient(c, 'veveprice.com'), true,
       'l’expéditeur doit être sur un domaine authentifié : le dire ici évite un 400 Brevo');
+    assert.equal(contient(c, "n'est PAS un domaine d'envoi"), true,
+      'le message doit désamorcer le piège du Return-Path, sinon on le repose');
   });
 });
 
@@ -164,5 +183,63 @@ test('COURRIEL_SIMULE=1 se signale, même sans clé — un repli muet n’en est
     assert.deepEqual(graves(c), [], 'la simulation est un choix explicite, pas une panne');
     assert.equal(contient(c, 'ECRITS DANS LE JOURNAL'), true,
       'un mode qui écrit des secrets dans les logs doit le DIRE');
+  });
+});
+
+
+// ═════════════════════════════════════════════════════════════════════════
+// L'EXPÉDITEUR (lot 97) — le contrôle qui parle même quand tout va bien
+// ═════════════════════════════════════════════════════════════════════════
+
+/**
+ * ⭐⭐⭐ POURQUOI CES TROIS BANCS EXISTENT.
+ *
+ * Le 06/08, la question « depuis quelle adresse ce service envoie-t-il ? »
+ * n'avait aucune réponse lisible : la variable vit dans Coolify, le défaut
+ * vit dans le code, et le contrôle se taisait dès que la variable était
+ * posée. Deux lots ont été dépensés à chercher des valeurs qu'aucune
+ * requête ne pouvait lire.
+ *
+ * ⭐ Un contrôle qui ne parle que pour signaler un MANQUE laisse invisible
+ *   la configuration EFFECTIVE. Ces bancs vérifient donc l'inverse de
+ *   l'habitude : que le constat SORT quand tout est correct.
+ */
+
+test('l’expéditeur retenu est affiché même quand tout est correct', () => {
+  const d = mkdtempSync(join(tmpdir(), 'id-'));
+  avec({ ...BON, DB_PATH: join(d, 'veve-id.db') }, () => {
+    const c = controlerDemarrage();
+    assert.deepEqual(graves(c), []);
+    assert.equal(contient(c, 'noreply@essai.example'), true,
+      'l’adresse réellement utilisée doit être lisible dans le journal, pas seulement dans /sante');
+    assert.equal(contient(c, 'BREVO_EXPEDITEUR'), true, 'et d’où elle vient');
+  });
+});
+
+test('BREVO_EXPEDITEUR absente : attention, jamais grave — le service envoie quand même', () => {
+  const d = mkdtempSync(join(tmpdir(), 'id-'));
+  avec({ ...BON, BREVO_EXPEDITEUR: undefined, DB_PATH: join(d, 'veve-id.db') }, () => {
+    const c = controlerDemarrage();
+    assert.deepEqual(graves(c), [], 'le défaut est valide : ce n’est pas une panne, c’est un non-choix');
+    assert.equal(contient(c, 'DEFAUT DU CODE'), true,
+      'le journal doit dire que personne n’a choisi cette adresse pour CE déploiement');
+  });
+});
+
+test('🔴 le défaut du code est noreply@veveprice.com, PAS le Return-Path', () => {
+  // ⭐⭐ LE BANC QUI FERME LE PIÈGE. `mail.veveprice.com` est le sous-domaine
+  // délégué à Brevo pour signer les rebonds ; ce n'est pas un domaine d'envoi.
+  // Le défaut le nommait, donc tout redéploiement sans la variable aurait
+  // envoyé depuis une adresse refusée par l'API — et la page aurait dit
+  // « vérifiez vos e-mails » exactement comme un succès.
+  // ⭐ On teste la CONSTANTE, pas la variable : c'est le défaut qui a menti,
+  //   et c'est lui qui doit être surveillé.
+  assert.equal(EXPEDITEUR_DEFAUT, 'noreply@veveprice.com');
+  assert.equal(EXPEDITEUR_DEFAUT.includes('mail.veveprice.com'), false,
+    'le Return-Path n’est pas un expéditeur — Brevo rend 400');
+  const d = mkdtempSync(join(tmpdir(), 'id-'));
+  avec({ ...BON, BREVO_EXPEDITEUR: undefined, DB_PATH: join(d, 'veve-id.db') }, () => {
+    assert.equal(expediteur(), EXPEDITEUR_DEFAUT, 'sans variable, c’est la constante qui part');
+    assert.equal(contient(controlerDemarrage(), 'noreply@veveprice.com'), true);
   });
 });

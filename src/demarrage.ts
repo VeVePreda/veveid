@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, unlinkSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { expediteur, EXPEDITEUR_DEFAUT, nomExpediteur } from './courriel.ts';
 
 /**
  * 🔴🔴 CE FICHIER EXISTE POUR RENDRE BRUYANTE LA PANNE LA PLUS DANGEREUSE
@@ -201,9 +202,40 @@ export function controlerDemarrage(): Constat[] {
       detail: "La page 'verifiez vos e-mails' s'affichera quand meme — elle est identique "
         + "dans tous les cas, expres — et personne ne recevra rien. "
         + "Cle API v3 dans Brevo > SMTP & API > Cles API (elle commence par xkeysib-). "
-        + "L'expediteur doit etre sur un domaine authentifie : mail.veveprice.com.",
+        + "L'expediteur doit etre sur un domaine authentifie chez Brevo : "
+        + "veveprice.com (mail.veveprice.com n'est PAS un domaine d'envoi, "
+        + "c'est le Return-Path).",
     });
   }
+
+  /**
+   * ⭐⭐⭐ CE CONTRÔLE PARLE MÊME QUAND TOUT VA BIEN, ET C'EST TOUT SON OBJET.
+   *
+   * Le 06/08, la question « depuis QUELLE adresse ce service envoie-t-il ? »
+   * n'avait aucune réponse lisible : la variable vit dans Coolify, le défaut
+   * vit dans le code, et le contrôle de démarrage SE TAISAIT dès que la
+   * variable était posée. Deux lots ont été dépensés à chercher des valeurs
+   * qu'aucune requête ne pouvait lire.
+   *
+   * ⭐ Un contrôle qui ne parle que pour signaler un manque laisse invisible
+   *   la CONFIGURATION EFFECTIVE — c'est-à-dire la seule chose qu'on veut
+   *   savoir quand un envoi échoue. On affiche donc toujours l'adresse
+   *   retenue ET son origine : c'est la différence entre « la variable est
+   *   posée » et « voici ce qui part ».
+   * ⛔ Il ne remplace pas `GET /sante` (qui rend la même chose à distance) :
+   *   celui-ci est lisible dans le journal AVANT le premier visiteur.
+   */
+  const deLaVariable = Boolean(process.env.BREVO_EXPEDITEUR);
+  c.push({
+    gravite: deLaVariable ? 'ok' : 'attention',
+    titre: `Expediteur des courriels : ${nomExpediteur()} <${expediteur()}>`
+      + (deLaVariable ? ' (BREVO_EXPEDITEUR)' : ' — DEFAUT DU CODE, aucune variable posee'),
+    detail: "BREVO_EXPEDITEUR n'est pas posee : le service retombe sur "
+      + `${EXPEDITEUR_DEFAUT}. Ce defaut est le bon domaine authentifie, mais il `
+      + "n'a ete choisi par personne pour CE deploiement. Posez la variable "
+      + "explicitement — un envoi refuse par Brevo ne se voit nulle part "
+      + "ailleurs que dans /sante.",
+  });
   if (process.env.COURRIEL_SIMULE === '1') {
     c.push({
       gravite: 'attention',
