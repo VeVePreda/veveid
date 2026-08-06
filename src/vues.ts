@@ -1,6 +1,7 @@
 import type { Avancement, Eligibles } from './defi.ts';
 import { PRIX_MIN, PRIX_MAX, NB_CIBLES, FENETRE_MIN } from './defi.ts';
 import type { Avoir, Compte } from './avoirs.ts';
+import { CHAMP_PIEGE, sceau } from './robots.ts';
 import { DELAI_GRACE_JOURS } from './avoirs.ts';
 
 /**
@@ -49,6 +50,10 @@ label.choix{display:flex;gap:12px;align-items:center;padding:12px 4px;border-bot
 .coche{width:26px;height:26px;border-radius:50%;border:2px solid var(--trait);flex:none;
   display:flex;align-items:center;justify-content:center;font-size:.8rem}
 .coche.vu{background:var(--vert);border-color:var(--vert);color:#0f150e}
+/* ⛔ PAS display:none, PAS type=hidden : un robot un peu serieux ignore les
+   deux. On sort le champ de l'ecran, il reste « visible » pour le code. */
+.piege{position:absolute!important;left:-9999px!important;top:auto!important;
+  width:1px!important;height:1px!important;overflow:hidden}
 `;
 
 export const page = (titre: string, corps: string, script = '') =>
@@ -64,6 +69,7 @@ const entete = (titre: string, droite = '') =>
 const prix = (n: number) => n.toLocaleString('fr-FR');
 
 export function accueil(jeu?: string, erreur?: string): string {
+  const marque = sceau();
   return page('Identité', `${entete('Identité')}
   ${erreur ? `<div class="err">${echapper(erreur)}</div>` : ''}
   <div class="carte">
@@ -80,6 +86,21 @@ export function accueil(jeu?: string, erreur?: string): string {
       à choisir, donc pas de mot de passe à perdre.</p>
       <input id="email" name="email" type="email" placeholder="vous@exemple.fr" inputmode="email"
         autocapitalize="off" autocomplete="email" spellcheck="false" required>
+
+      ${/* ⭐ LE CHAMP PIÈGE. Invisible à l'écran, rempli par les robots qui
+             remplissent « tous les champs ». ⚠️ aria-hidden + tabindex=-1
+             + autocomplete=off sont OBLIGATOIRES : sans eux, un lecteur
+             d'écran l'annonce et un gestionnaire de mots de passe le remplit
+             — on bloquerait de vraies personnes, en silence. */''}
+      <div class="piege" aria-hidden="true">
+        <label for="${CHAMP_PIEGE}">Ne remplissez pas ce champ</label>
+        <input id="${CHAMP_PIEGE}" name="${CHAMP_PIEGE}" type="text"
+          tabindex="-1" autocomplete="off">
+      </div>
+      ${/* ⭐ L'heure d'affichage, SIGNÉE : un formulaire revenu en moins de
+             deux secondes et demie n'a pas été rempli par un humain. */''}
+      <input type="hidden" name="sceau" value="${echapper(marque)}">
+
       <p style="margin:12px 0 0"><button class="principal">Recevoir mon lien</button></p>
     </div>
   </form>

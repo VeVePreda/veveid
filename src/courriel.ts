@@ -55,6 +55,49 @@ const simule = () => process.env.COURRIEL_SIMULE === '1';
 
 export interface Envoi { ok: boolean; id?: string; pourquoi?: string; simule?: boolean }
 
+/**
+ * ⭐⭐⭐ LA TRACE DU DERNIER ENVOI — et ce que son absence a coûté.
+ *
+ * Le 06/08, un envoi refusé par Brevo (« unrecognised IP address ») n'était
+ * lisible QUE dans le journal du conteneur. De l'extérieur, la page disait
+ * « vérifiez vos e-mails » — exactement comme un succès, et c'est voulu.
+ * Il a fallu ouvrir Coolify, trouver le bon onglet, et savoir quoi chercher.
+ *
+ * ⭐ Une trace en mémoire suffit : c'est le DERNIER état qui intéresse, pas
+ *    l'historique. Elle disparaît au redémarrage, et c'est très bien — un
+ *    échec d'avant le redéploiement ne dit rien de l'installation d'après.
+ *
+ * ⛔ ON NE GARDE JAMAIS L'ADRESSE DU DESTINATAIRE. Ni ici, ni dans ce qui est
+ *    exposé. La question est « l'envoi part-il ? », pas « à qui ».
+ */
+export interface Trace { quand: string; ok: boolean; pourquoi?: string; simule?: boolean }
+let _dernier: Trace | null = null;
+export const dernierEnvoi = (): Trace | null => _dernier;
+/** Réservé aux tests. */
+export const oublierDernierEnvoi = () => { _dernier = null; };
+
+/**
+ * ⚠️ CE QUI EST MASQUÉ, ET POURQUOI CHAQUE MOTIF EST LÀ.
+ *   · les adresses e-mail : un message d'erreur de Brevo peut citer le
+ *     destinataire, et cette trace est exposée publiquement ;
+ *   · les clés `xkeysib-…` : par principe, jamais dans une réponse HTTP ;
+ *   · la longueur : un message immense servi sur une route publique est une
+ *     surface d'attaque gratuite.
+ * ⭐ L'adresse IP du serveur n'est PAS masquée : elle est publique par nature
+ *   (c'est celle qui répond au DNS), et c'est précisément l'information qui a
+ *   permis de corriger la liste blanche de Brevo en une minute.
+ */
+const masquer = (t: string) => String(t ?? '')
+  .replace(/[\w.+-]+@[\w.-]+\.\w{2,}/g, '***@***')
+  .replace(/xkeysib-[\w-]+/gi, 'xkeysib-***')
+  .slice(0, 300);
+
+const noter = (e: Envoi): Envoi => {
+  _dernier = { quand: new Date().toISOString(), ok: e.ok, simule: e.simule,
+    ...(e.pourquoi ? { pourquoi: masquer(e.pourquoi) } : {}) };
+  return e;
+};
+
 export interface Message { a: string; sujet: string; texte: string; html: string }
 
 /**
@@ -68,9 +111,9 @@ export async function envoyer(m: Message, fetchImpl: typeof fetch = fetch): Prom
   if (simule()) {
     console.log(`[courriel] SIMULÉ → ${m.a} — « ${m.sujet} »`);
     console.log(`[courriel] SIMULÉ, corps :\n${m.texte}`);
-    return { ok: true, simule: true };
+    return noter({ ok: true, simule: true });
   }
-  if (!CLE()) return { ok: false, pourquoi: 'BREVO_CLE absente : aucun courriel ne peut partir' };
+  if (!CLE()) return noter({ ok: false, pourquoi: 'BREVO_CLE absente : aucun courriel ne peut partir' });
 
   try {
     const res = await fetchImpl('https://api.brevo.com/v3/smtp/email', {
@@ -96,13 +139,13 @@ export async function envoyer(m: Message, fetchImpl: typeof fetch = fetch): Prom
     const brut = await res.text();
     if (!res.ok) {
       // On garde la phrase de Brevo : c'est elle qui nomme le vrai défaut.
-      return { ok: false, pourquoi: `Brevo ${res.status} : ${brut.slice(0, 300)}` };
+      return noter({ ok: false, pourquoi: `Brevo ${res.status} : ${brut.slice(0, 300)}` });
     }
     let id: string | undefined;
     try { id = JSON.parse(brut)?.messageId; } catch { /* 201 sans corps lisible : ce n'est pas un échec */ }
-    return { ok: true, id };
+    return noter({ ok: true, id });
   } catch (e) {
-    return { ok: false, pourquoi: `Brevo injoignable : ${(e as Error).message}` };
+    return noter({ ok: false, pourquoi: `Brevo injoignable : ${(e as Error).message}` });
   }
 }
 

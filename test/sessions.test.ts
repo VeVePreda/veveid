@@ -182,3 +182,72 @@ test('le ménage efface le périmé et garde la trace récente d’une révocati
   assert.ok(ss.etatDeLaSession(vif, t0).palier, 'le vivant reste');
   assert.equal(ss.etatDeLaSession(mort, t0).palier, undefined);
 });
+
+// ═════════════════════════════════════════════════════════════════════════
+// Les garde-fous anti-robots (lot 95)
+// ═════════════════════════════════════════════════════════════════════════
+const rb = await import('../src/robots.ts');
+
+test('un formulaire posté trop vite est écarté, un formulaire lu ne l’est pas', () => {
+  const t0 = Date.now();
+  const s = rb.sceau(t0);
+  assert.equal(rb.verdict('', s, t0 + 500).ok, false, 'un robot poste dans la seconde');
+  assert.equal(rb.verdict('', s, t0 + rb.DELAI_MIN_MS + 1).ok, true, 'un humain met plus de temps');
+  /** ⚠️ Et la borne HAUTE : un sceau récolté une fois ne doit pas ouvrir mille fois. */
+  assert.equal(rb.verdict('', s, t0 + rb.DELAI_MAX_MS + 1).ok, false, 'un sceau périmé n’est pas un laissez-passer');
+});
+
+test('le champ piège désigne son robot', () => {
+  const s = rb.sceau(Date.now() - 5000);
+  assert.equal(rb.verdict('http://spam.example', s).ok, false);
+  assert.equal(rb.verdict('   ', s).ok, true, 'un champ vide d’espaces reste vide');
+  assert.equal(rb.verdict(null, s).ok, true);
+  assert.equal(rb.verdict(undefined, s).ok, true);
+});
+
+/**
+ * 🔴 LE BANC QUI COMPTE. Sans signature, il suffirait de poster un horodatage
+ *    vieux de dix secondes : le contrôle ne coûterait RIEN à contourner et
+ *    donnerait l'illusion d'une protection.
+ */
+test('un sceau forgé ou trafiqué n’ouvre rien', () => {
+  const t0 = Date.now();
+  const vrai = rb.sceau(t0 - 5000);
+  assert.equal(rb.verdict('', `${t0 - 5000}.nimportequoi`).ok, false, 'signature inventée');
+  assert.equal(rb.verdict('', '').ok, false, 'sceau absent');
+  assert.equal(rb.verdict('', 'pas-de-point').ok, false);
+  // ⭐ On change l'horodatage en gardant la signature : elle ne colle plus.
+  const [, sig] = vrai.split('.');
+  assert.equal(rb.verdict('', `${t0 - 999_999}.${sig}`).ok, false, 'horodatage rejoué');
+});
+
+test('l’adresse relayée n’est lue que si elle ressemble à une adresse', () => {
+  assert.equal(rb.adresseRelayee('203.0.113.7'), '203.0.113.7');
+  assert.equal(rb.adresseRelayee('203.0.113.7, 10.0.0.1'), '203.0.113.7', 'on prend la première');
+  assert.equal(rb.adresseRelayee('2001:db8::1'), '2001:db8::1');
+  for (const mauvais of ['', null, undefined, 42, 'pas une adresse', 'a'.repeat(60), '<script>'])
+    assert.equal(rb.adresseRelayee(mauvais as any), null, `« ${mauvais} » aurait dû être écarté`);
+});
+
+/**
+ * ⭐⭐ CE BANC EXISTE POUR LA TRACE EXPOSÉE PUBLIQUEMENT. `/sante` sert
+ *    `dernier` à qui le demande : une adresse ou une clé qui s'y glisserait
+ *    serait une fuite, pas une gêne.
+ */
+test('la trace du dernier envoi masque les adresses et les clés', async () => {
+  const co = await import('../src/courriel.ts');
+  co.oublierDernierEnvoi();
+  assert.equal(co.dernierEnvoi(), null, 'rien tant que rien n’est parti');
+  process.env.BREVO_CLE = 'xkeysib-secret';
+  delete process.env.COURRIEL_SIMULE;
+  const m = co.courrielDeConnexion('preda@exemple.fr', 'https://x/l?j=1', 15, true);
+  await co.envoyer(m, (async () => new Response(
+    '{"message":"sender preda@exemple.fr invalid, key xkeysib-abc"}', { status: 400 })) as any);
+  const t = co.dernierEnvoi()!;
+  assert.equal(t.ok, false);
+  assert.doesNotMatch(t.pourquoi!, /preda@exemple\.fr/, 'aucune adresse ne doit sortir');
+  assert.doesNotMatch(t.pourquoi!, /xkeysib-abc/, 'aucune clé ne doit sortir');
+  assert.match(t.pourquoi!, /Brevo 400/, '…mais le motif doit rester lisible');
+  assert.match(t.pourquoi!, /invalid/);
+  delete process.env.BREVO_CLE;
+});

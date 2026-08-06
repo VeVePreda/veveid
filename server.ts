@@ -16,7 +16,8 @@ import { demander, consommer, purgerLiens, DUREE_MIN } from './src/lien_magique.
 import {
   creerCode, echanger, etatDeLaSession, revoquer, revoquerTout, purgerSessions,
 } from './src/sessions.ts';
-import { envoyer, courrielDeConnexion } from './src/courriel.ts';
+import { envoyer, courrielDeConnexion, dernierEnvoi, expediteur } from './src/courriel.ts';
+import { CHAMP_PIEGE, verdict as verdictRobot, adresseRelayee } from './src/robots.ts';
 import { signer, memeSecret, fabriquerCles } from './src/jetons.ts';
 import { jeux, jeuConnu, retourAutorise, origineDe } from './src/jeux.ts';
 import { accueil, pageChoisir, pageDefi, pageCompte, pageLienEnvoye, page } from './src/vues.ts';
@@ -98,7 +99,36 @@ export const serveur = createServer(async (req, res) => {
   const trop = (r: typeof REGLES.api) => !autorise(`${ip}|${p}`, r);
 
   try {
-    if (m === 'GET' && p === '/sante') return json(res, { ok: true, at: new Date().toISOString() });
+    /**
+     * ⭐⭐⭐ LA SONDE DIT CE QUI BLOQUE — enrichie au lot 95.
+     *
+     * CE QUE SON ABSENCE A COÛTÉ : un envoi refusé par Brevo n'était lisible
+     * que dans le journal du conteneur. De l'extérieur, la page d'inscription
+     * répond « vérifiez vos e-mails » — exactement comme un succès, et c'est
+     * VOULU (elle ne doit pas dire si l'adresse existe). Il fallait donc
+     * ouvrir Coolify, trouver le bon onglet, savoir quoi chercher.
+     *
+     * ⭐ `dernier` est la trace du dernier envoi, adresses et clés MASQUÉES.
+     *   C'est ce champ qui aurait dit, en une requête :
+     *     « Brevo 401 : unrecognised IP address … »   puis
+     *     « Brevo 400 : sender ***@*** is not valid »
+     *
+     * ⛔ QUE DES BOOLÉENS POUR LES SECRETS. `cle: true` dit qu'une clé est
+     *   posée, jamais laquelle. L'expéditeur, lui, est déjà public : il est
+     *   écrit dans l'en-tête de chaque courriel envoyé.
+     */
+    if (m === 'GET' && p === '/sante') return json(res, {
+      ok: true,
+      at: new Date().toISOString(),
+      courriel: {
+        cle: Boolean(process.env.BREVO_CLE),
+        simule: process.env.COURRIEL_SIMULE === '1',
+        expediteur: expediteur(),
+        url_publique: Boolean(process.env.URL_PUBLIQUE),
+        dernier: dernierEnvoi(),
+      },
+      sites: [...jeux().keys()],
+    });
 
     /**
      * ⭐⭐ LA ROUTE QUE LE MIDDLEWARE DE veve-sites ATTEND DEPUIS LE LOT 42.
@@ -163,8 +193,53 @@ export const serveur = createServer(async (req, res) => {
        *    suffirait de regarder ce que le relais reçoit.
        */
       if (m === 'POST' && p === '/api/inscription') {
-        if (trop(REGLES.verifier)) return json(res, { erreur: 'trop de demandes' }, 429);
         const b = await jsonDe(req);
+        /**
+         * 🔴🔴 L'ADRESSE DU VISITEUR, PAS CELLE DU RELAIS — corrigé au lot 95.
+         *
+         * `trop()` indexe son seau sur `adresse()`, qui rend l'adresse de la
+         * CONNEXION. Derrière le relais de veveprice, c'est l'adresse de
+         * veveprice — la même pour tout le monde.
+         * ⇒ **5 inscriptions par 10 minutes pour la Terre entière.**
+         *
+         * Ce n'était pas une protection contre les robots : c'était une panne
+         * à partir du sixième inscrit, et un seul robot suffisait à fermer la
+         * porte à tous les autres.
+         *
+         * ⭐ On peut croire cet en-tête ICI et nulle part ailleurs : la
+         *   requête a déjà présenté `x-service`. Ce n'est pas « un en-tête
+         *   qu'on croit », c'est « une information transmise par un service
+         *   identifié ». Le contrôle du secret est dix lignes plus haut.
+         */
+        const vraie = adresseRelayee(req.headers['x-client-ip']);
+        const seau = `${vraie ?? ip}|inscription`;
+        if (!autorise(seau, REGLES.verifier)) return json(res, { erreur: 'trop de demandes' }, 429);
+
+        /**
+         * ⛔⛔ ON NE REVÉRIFIE PAS ICI LE SCEAU DU RELAIS — et c'est un banc
+         *     rouge qui l'a imposé.
+         *
+         * Ma première version faisait vérifier par veveid le sceau signé par
+         * veveprice. Les deux le signaient avec un secret différent
+         * (`SESSION_SECRET` ici, `VEVEID_SERVICE` là-bas) : TOUTE inscription
+         * relayée était écartée pour « sceau invalide ». Une protection qui
+         * bloque 100 % des humains et 100 % des robots n'est pas stricte,
+         * elle est cassée.
+         *
+         * ⭐⭐⭐ ET LA VRAIE LEÇON EST PLUS PROFONDE QUE LE RÉGLAGE : **UN SCEAU
+         *   NE SE VÉRIFIE QUE PAR CELUI QUI L'A ÉMIS.** Le faire contrôler par
+         *   un tiers, c'est inventer un second secret partagé sans le dire —
+         *   et un secret qu'on n'a pas décidé de partager n'est jamais posé
+         *   des deux côtés.
+         *
+         * ⭐ CE QUI PROTÈGE CETTE ROUTE, ET C'EST SUFFISANT :
+         *   · `x-service` — l'appelant est identifié, il répond de ses
+         *     visiteurs et applique SES garde-fous sur SON formulaire ;
+         *   · le limiteur par ADRESSE DU VISITEUR, juste au-dessus ;
+         *   · le limiteur par ADRESSE E-MAIL (3 / 15 min, `lien_magique.ts`) —
+         *     celui-là est incontournable, et c'est LUI qui empêche de
+         *     bombarder un tiers.
+         */
         const email = String(b.email ?? '');
         const retourDemande = String(b.retour ?? '');
         const site = String(b.site ?? '');
@@ -327,6 +402,18 @@ export const serveur = createServer(async (req, res) => {
         return html(res, accueil(undefined, 'Trop de demandes depuis cette connexion. Patientez quelques minutes.'), 429);
       const b = await corpsDe(req);
       const email = String(b.get('email') ?? '');
+
+      /**
+       * ⭐ CHAMP PIÈGE ET DÉLAI MINIMUM — voir `robots.ts` pour le pourquoi.
+       * ⛔ ON REND LA MÊME PAGE QU'UN SUCCÈS. Dire « vous êtes un robot »
+       *   apprendrait à l'auteur ce qui l'a trahi, donc comment corriger.
+       *   Le journal, lui, a le droit de savoir.
+       */
+      const vr = verdictRobot(b.get(CHAMP_PIEGE), b.get('sceau'));
+      if (!vr.ok) {
+        console.warn(`[inscription] écarté : ${vr.pourquoi}`);
+        return html(res, pageLienEnvoye(DUREE_MIN));
+      }
 
       if (!urlPublique()) {
         console.error('[inscription] URL_PUBLIQUE absente : aucun lien ne peut être fabriqué.');
