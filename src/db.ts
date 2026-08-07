@@ -9,22 +9,90 @@ import { dirname } from 'node:path';
  */
 let _db: DatabaseSync | null = null;
 
+/**
+ * 🔴🔴 LOT 108 — `_db` N'EST AFFECTÉ QU'À LA FIN, ET C'EST TOUT LE POINT.
+ *
+ * CE QUE L'ANCIEN ORDRE COÛTAIT. `_db` était posé à la ligne de son
+ * ouverture, AVANT `exec(SCHEMA)` et AVANT `migrer()`. Or la première ligne
+ * de cette fonction est `if (_db) return _db;`. Donc, si la migration levait :
+ *   · la 1ʳᵉ requête rendait 500 ;
+ *   · **toutes les suivantes réussissaient**, servies par un `_db` déjà
+ *     mémorisé — sur une base restée à l'ANCIENNE FORME.
+ * Une panne bruyante qui ne l'est qu'une fois est une panne muette : le
+ * temps qu'on aille voir, le service a l'air d'aller bien.
+ *
+ * ⭐⭐⭐ **UN ÉTAT MÉMORISÉ AVANT D'ÊTRE VALIDE TRANSFORME UNE PANNE EN
+ *    MENSONGE.** On construit donc dans une variable LOCALE, et `_db` ne
+ *    reçoit la base que lorsqu'elle est à la bonne forme. Un échec ferme le
+ *    fichier, laisse `_db` à `null`, et relève : la requête suivante
+ *    retentera, et échouera de nouveau. C'est ce qu'on veut.
+ */
 export function base(): DatabaseSync {
   if (_db) return _db;
   const fichier = process.env.DB_PATH ?? './veve-id.db';
   try { mkdirSync(dirname(fichier), { recursive: true }); } catch { /* déjà là */ }
-  _db = new DatabaseSync(fichier);
-  _db.exec('PRAGMA journal_mode = WAL');
-  _db.exec('PRAGMA foreign_keys = ON');
-  _db.exec(SCHEMA);
-  /**
-   * ⚠️ APRÈS le schéma, et TOUJOURS — base neuve comprise. `migrer()` est
-   *    idempotente : sur une base déjà à la bonne forme elle ne fait rien
-   *    et rend un journal vide. C'est ce qui permet de ne pas avoir à
-   *    savoir, au démarrage, laquelle des deux situations on est.
-   */
-  for (const ligne of migrer(_db)) console.log(`[base] migration : ${ligne}`);
+  const db = new DatabaseSync(fichier);
+  try {
+    db.exec('PRAGMA journal_mode = WAL');
+    db.exec('PRAGMA foreign_keys = ON');
+    db.exec(SCHEMA);
+    /**
+     * ⚠️ APRÈS le schéma, et TOUJOURS — base neuve comprise. `migrer()` est
+     *    idempotente : sur une base déjà à la bonne forme elle ne fait rien
+     *    et rend un journal vide. C'est ce qui permet de ne pas avoir à
+     *    savoir, au démarrage, laquelle des deux situations on est.
+     */
+    const journal = migrer(db);
+    for (const ligne of journal) console.log(`[base] migration : ${ligne}`);
+    consigner(db, journal);
+  } catch (e) {
+    try { db.close(); } catch { /* jamais ouverte */ }
+    throw e;
+  }
+  _db = db;
   return _db;
+}
+
+/**
+ * ⭐⭐⭐ LOT 108 — LE JOURNAL DE MIGRATION S'ÉCRIT EN BASE, PAS SEULEMENT
+ * DANS LA SORTIE STANDARD.
+ *
+ * CE QUE SON ABSENCE A COÛTÉ, LE 07/08. Le lot 107 a été déposé à 14:42, le
+ * conteneur a démarré à 14:44 — et la migration n'a tourné qu'à **15:02**, à
+ * la première requête qui a touché la base (`base()` est paresseuse). Entre
+ * les deux, on a cherché la preuve dans le journal du conteneur et on a
+ * conclu « migration NON PROUVÉE ». La conclusion était fausse et l'outil
+ * était juste : **la ligne n'était pas encore écrite.**
+ * ⭐⭐ Une mesure pas encore mûre et une mesure périmée se ressemblent, et
+ *    elles sont l'inverse l'une de l'autre.
+ *
+ * 🔴 UN `console.log` EST UN ÉVÉNEMENT, UNE LIGNE EN BASE EST UN ÉTAT. Le
+ *    journal d'un conteneur défile, se tronque, et repart de zéro au
+ *    redémarrage. On ne peut donc jamais y lire « cette base a-t-elle pris
+ *    sa forme actuelle, et quand ». Ici, si.
+ *
+ * ⛔ ON N'ÉCRIT QUE LE JOURNAL — des noms de colonnes et des comptages.
+ *    Aucune adresse, aucun identifiant de compte : cette table sera lue par
+ *    la page d'administration, et ce qui n'y est pas ne peut pas en fuir.
+ *
+ * ⭐ `base.dernier_demarrage` est écrit à CHAQUE ouverture, même quand la
+ *    migration n'a rien fait. Ce n'est pas du confort : c'est la seule
+ *    ÉCRITURE du démarrage. Un volume monté en lecture seule — panne réelle,
+ *    et aujourd'hui invisible jusqu'à la première inscription — fait
+ *    échouer l'ouverture ici, donc le démarrage (voir `demarrer()`).
+ *    *Prouver par l'écriture, jamais par la lecture.*
+ */
+function consigner(db: DatabaseSync, journal: string[]): void {
+  const t = new Date().toISOString();
+  const poser = db.prepare(
+    'INSERT INTO reglages (cle, valeur, maj) VALUES (?,?,?) '
+    + 'ON CONFLICT(cle) DO UPDATE SET valeur=excluded.valeur, maj=excluded.maj');
+  poser.run('base.dernier_demarrage', t, t);
+  // ⚠️ Rang sur DEUX chiffres : sans le remplissage, `migration.<t>.10`
+  //    se rangerait AVANT `migration.<t>.2` dans un tri lexicographique, et
+  //    le journal se relirait dans le désordre. Il n'y a jamais eu dix
+  //    lignes en une fois — c'est précisément pour ça qu'on ne le verrait pas.
+  journal.forEach((ligne, i) => poser.run(`migration.${t}.${String(i).padStart(2, '0')}`, ligne, t));
 }
 export function fermer(): void { try { _db?.close(); } catch { /* déjà fermée */ } _db = null; }
 

@@ -5,6 +5,7 @@ import { PRIX_MIN, PRIX_MAX, NB_CIBLES, FENETRE_MIN } from './defi.ts';
 import type { Avoir, Compte } from './avoirs.ts';
 import { CHAMP_PIEGE, sceau } from './robots.ts';
 import { DELAI_GRACE_JOURS } from './avoirs.ts';
+import type { Forme, LigneSite, Activite, Trouvaille } from './admin.ts';
 
 /**
  * LES VUES DU SERVICE D'IDENTITÉ — téléphone d'abord, comme les jeux.
@@ -436,4 +437,129 @@ async function sonder(){
 }
 setTimeout(sonder,10000);
 </script>`);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// 🔥 LOT 108 — LA PAGE D'EXPLOITATION
+// ═══════════════════════════════════════════════════════════════════════
+/**
+ * ⛔⛔ ELLE NE CONTIENT AUCUNE ADRESSE EN CLAIR, ET UN BANC LE VÉRIFIE SUR
+ *    LE HTML RENDU (`test/admin.test.ts`). Pas sur les fonctions : sur la
+ *    chaîne finale. Une règle qui n'est vérifiée qu'à l'entrée se contourne
+ *    par un chemin qu'on n'avait pas prévu.
+ *
+ * ⚠️ `noindex` est déjà posé par `page()` pour TOUT le service. On n'ajoute
+ *    rien : deux façons de dire la même chose, et un jour l'une des deux
+ *    change.
+ */
+const oui = (b: boolean) => (b ? '✅' : '—');
+const nb = (n: number) => Number(n ?? 0).toLocaleString('fr-FR');
+
+const blocForme = (f: Forme) => {
+  const cols = f.colonnes.map((c) =>
+    `<code>${echapper(c.nom)}</code> <span class="doux">${echapper(c.type || '?')}`
+    + `${c.obligatoire ? ' · requis' : ''}${c.defaut ? ` · défaut ${echapper(c.defaut)}` : ''}</span>`)
+    .join('<br>');
+  const idx = f.index.map((i) =>
+    `<div class="ligne"><span style="flex:1"><code>${echapper(i.nom)}</code>`
+    + `<br><span class="doux">${i.unique ? 'unique' : 'simple'}${i.partiel ? ' · partiel' : ''}</span></span></div>`)
+    .join('');
+  const migs = f.migrations.length
+    ? f.migrations.map((m) =>
+      `<div class="ligne"><span style="flex:1">${echapper(m.valeur)}`
+      + `<br><span class="doux">${echapper(m.maj)}</span></span></div>`).join('')
+    /**
+     * ⭐⭐⭐ « AUCUNE MIGRATION CONSIGNÉE » NE VEUT PAS DIRE « RIEN N'A
+     * MIGRÉ ». Le journal en base date du lot 108 : tout ce qui a migré
+     * AVANT n'y figure pas, et n'y figurera jamais. Le dire ici, à
+     * l'endroit exact où on lirait le vide, est la seule façon d'empêcher
+     * qu'on en tire la conclusion inverse — c'est très précisément
+     * l'erreur du 07/08, répétée à l'envers.
+     */
+    : `<p class="doux" style="margin:0">Aucune migration consignée. ⚠️ Le journal
+       en base commence au lot 108 : une migration ANTÉRIEURE n'y figure pas.
+       Ce vide ne dit rien sur la forme de la base — c'est le bloc du dessus
+       qui la dit.</p>`;
+  return `<h2>Forme de la base</h2>
+  <div class="carte">
+    <div class="rang"><b>colonne <code>site</code></b> <span>${oui(f.site_present)}</span></div>
+    <p class="doux" style="margin:10px 0 0">dernier démarrage : ${echapper(f.dernier_demarrage ?? 'inconnu')}</p>
+  </div>
+  <div class="carte"><b>comptes</b><p style="margin:8px 0 0;font-size:.9rem">${cols}</p></div>
+  <div class="carte"><b>index</b>${idx || '<p class="doux">aucun</p>'}</div>
+  <div class="carte"><b>journal de migration</b>${migs}</div>`;
+};
+
+const blocSites = (l: LigneSite[]) => `<h2>Comptes par site</h2>
+  ${l.length ? l.map((s) => `<div class="carte">
+    <div class="rang"><b style="flex:1">${echapper(s.site)}</b><span>${nb(s.total)}</span></div>
+    <p class="doux" style="margin:8px 0 0">
+      portefeuille : ${nb(s.avec_portefeuille)} · sans : ${nb(s.sans_portefeuille)}<br>
+      vérifiés : ${nb(s.verifies)} · en délai de grâce : ${nb(s.en_grace)}</p>
+  </div>`).join('') : '<div class="carte doux">Aucun compte.</div>'}`;
+
+const blocActivite = (a: Activite) => `<h2>Activité</h2>
+  <div class="carte">
+    <div class="ligne"><span style="flex:1">découvertes <span class="doux">(lot 106)</span></span>
+      <span>${nb(a.decouvertes.en_attente)} en attente</span></div>
+    <div class="ligne"><span style="flex:1" class="doux">abouties / autres / aujourd’hui</span>
+      <span>${nb(a.decouvertes.abouties)} / ${nb(a.decouvertes.autres)} / <b>${nb(a.decouvertes.aujourdhui)}</b></span></div>
+    <div class="ligne"><span style="flex:1">défis <span class="doux">(par adresse)</span></span>
+      <span>${nb(a.defis.en_attente)} en attente</span></div>
+    <div class="ligne"><span style="flex:1">sessions actives</span><span>${nb(a.sessions_actives)}</span></div>
+    <div class="ligne"><span style="flex:1">liens de connexion en cours</span><span>${nb(a.liens_en_cours)}</span></div>
+    <div class="ligne"><span style="flex:1">avoirs enregistrés</span><span>${nb(a.avoirs)}</span></div>
+  </div>`;
+
+const blocRecherche = (t?: Trouvaille) => {
+  let r = '';
+  if (t && t.quoi === 'inconnu') {
+    r = `<div class="err">Ce terme ne ressemble ni à une adresse e-mail ni à un
+      portefeuille (<code>0x…</code>). Rien n’a été cherché.</div>`;
+  } else if (t && !t.trouve) {
+    r = `<div class="carte">Aucun compte pour ce ${t.quoi === 'email' ? 'courriel' : 'portefeuille'}.</div>`;
+  } else if (t) {
+    r = t.comptes.map((c) => `<div class="carte">
+      <div class="rang"><b style="flex:1">${echapper(c.site)}</b>
+        <span class="doux">créé le ${echapper(c.cree_le.slice(0, 10))}</span></div>
+      <p class="doux" style="margin:8px 0 0">
+        portefeuille : ${oui(c.a_un_portefeuille)} · vérifié : ${oui(c.verifie)}${
+      c.verifie_le ? ` <span class="doux">(${echapper(c.verifie_le.slice(0, 10))})</span>` : ''}<br>
+        ${c.indice_email ? `indice courriel : <b>${echapper(c.indice_email)}</b><br>` : ''}
+        ${c.indice_wallet ? `indice portefeuille : <b>${echapper(c.indice_wallet)}</b><br>` : ''}
+        ${c.abonne_jusqu_a ? `abonné jusqu’au ${echapper(c.abonne_jusqu_a.slice(0, 10))}<br>` : ''}
+        ${c.en_grace ? `⚠️ suppression demandée le ${echapper(c.en_grace.slice(0, 10))}` : ''}</p>
+    </div>`).join('');
+  }
+  return `<h2>Chercher un compte</h2>
+  <div class="carte">
+    <p class="doux" style="margin:0 0 10px">Une adresse e-mail ou un portefeuille
+    <code>0x…</code>. Rien ne s’affiche tant qu’on ne demande pas — cette page ne
+    liste personne.</p>
+    <form method="post" action="/admin/chercher">
+      <input name="q" autocomplete="off" spellcheck="false" placeholder="adresse ou 0x…">
+      <button class="principal" style="margin-top:10px">Chercher</button>
+    </form>
+  </div>${r}`;
+};
+
+/**
+ * ⚠️ LE TERME CHERCHÉ N'EST PAS RÉAFFICHÉ. Il vient d'un POST (donc il n'est
+ *    ni dans l'URL, ni dans l'historique, ni dans le `Referer`) : le remettre
+ *    dans le HTML le redéposerait dans les trois. Le résultat suffit à savoir
+ *    ce qu'on a demandé.
+ */
+export function pageAdmin(
+  f: Forme, sites: LigneSite[], a: Activite, t?: Trouvaille,
+): string {
+  return page('Exploitation', `${entete('Exploitation', 'veve-id')}
+  <div class="carte doux" style="margin-top:0">Cette page <b>regarde</b> : elle ne
+  modifie rien et n’affiche aucune adresse en clair.</div>
+  ${blocRecherche(t)}
+  ${blocForme(f)}
+  ${blocSites(sites)}
+  ${blocActivite(a)}
+  <form method="post" action="/admin/sortir" style="margin-top:18px">
+    <button class="danger">Fermer la session d’exploitation</button>
+  </form>`);
 }

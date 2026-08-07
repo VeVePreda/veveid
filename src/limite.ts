@@ -24,6 +24,16 @@ export const REGLES = {
   /** Fabrication d'images : la route la plus chère du service. */
   carte: { max: 40, parMs: 60_000 },
   carteGlobal: { max: 300, parMs: 60_000 },
+  /**
+   * 🔥 LOT 108 — L'EXPLOITATION.
+   * ⚠️ Ce plafond ne protège pas d'une force brute sur `ADMIN_TOKEN` : 24
+   *    octets tirés au hasard ne se devinent pas, et un plafond ne change
+   *    rien à ça. Ce qu'il borne, c'est **la recherche** : elle répond
+   *    « ce compte existe » à qui présente une adresse, donc elle ne doit
+   *    jamais devenir une moulinette sur une liste d'adresses achetée —
+   *    même derrière le jeton, même par mégarde.
+   */
+  admin: { max: 30, parMs: 60_000 },
 } satisfies Record<string, Regle>;
 
 export function autorise(cle: string, r: Regle, maintenant = Date.now()): boolean {

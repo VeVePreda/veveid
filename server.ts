@@ -1,8 +1,12 @@
 import { createServer, type ServerResponse } from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
-import { q1, fermer as fermerBase } from './src/db.ts';
-import { COOKIE, creerJeton, lireJeton, lireCookie } from './src/session.ts';
+import { q1, base, fermer as fermerBase } from './src/db.ts';
+import {
+  COOKIE, creerJeton, lireJeton, lireCookie,
+  COOKIE_ADMIN, creerJetonAdmin, lireJetonAdmin, poserCookieAdmin, effacerCookieAdmin, jetonAdmin,
+} from './src/session.ts';
+import { forme, parSite, activite, chercher, santeDeLaBase } from './src/admin.ts';
 import { autorise, adresse, purgerSeaux, REGLES } from './src/limite.ts';
 import { isWallet } from './src/collectchain.ts';
 import {
@@ -27,7 +31,7 @@ import { envoyer, courrielDeConnexion, dernierEnvoi, expediteur } from './src/co
 import { CHAMP_PIEGE, verdict as verdictRobot, adresseRelayee } from './src/robots.ts';
 import { signer, memeSecret, fabriquerCles } from './src/jetons.ts';
 import { jeux, jeuConnu, retourAutorise, origineDe } from './src/jeux.ts';
-import { accueil, pageChoisir, pageDefi, pageCompte, pageLienEnvoye, page, pageDecouvrir, pageDecouverte} from './src/vues.ts';
+import { accueil, pageChoisir, pageDefi, pageCompte, pageLienEnvoye, page, pageDecouvrir, pageDecouverte, pageAdmin } from './src/vues.ts';
 import { annoncerDemarrage } from './src/demarrage.ts';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -135,6 +139,21 @@ export const serveur = createServer(async (req, res) => {
         dernier: dernierEnvoi(),
       },
       sites: [...jeux().keys()],
+      /**
+       * 🔥 LOT 108 — CE QUE LA BASE DÉCLARE, DE L'EXTÉRIEUR, EN UNE REQUÊTE.
+       *
+       * CE QUE SON ABSENCE A COÛTÉ LE 07/08 : après le dépôt du lot 107, la
+       * seule façon de savoir si la migration avait eu lieu était d'ouvrir
+       * Coolify, de trouver l'onglet des journaux du CONTENEUR (pas celui du
+       * déploiement) et de savoir quoi chercher. On a conclu « non prouvé »
+       * d'une ligne qui n'était pas encore écrite.
+       *
+       * ⛔ QUE DES BOOLÉENS ET UN COMPTAGE — même règle que pour les secrets
+       *    au lot 95. `site_present` dit qu'une colonne existe ; il ne dit
+       *    ni combien de comptes, ni lesquels, ni sur quels sites. La forme
+       *    d'un schéma n'identifie personne ; sa population, si.
+       */
+      base: santeDeLaBase(),
       // ⭐ LES DESTINATIONS DU RELAIS SONT PUBLIQUES, ET C'EST VOULU : elles
       // ne révèlent rien (deux chemins de ce service) et elles répondent à
       // la seule question qu'un site se pose en intégrant la passerelle —
@@ -470,6 +489,77 @@ export const serveur = createServer(async (req, res) => {
     if (m === 'GET' && p === '/cle-publique') {
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=3600' });
       return res.end(clePubliqueTexte());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // 🔥 LOT 108 — L'EXPLOITATION
+    // ═══════════════════════════════════════════════════════════════════
+    /**
+     * ⚠️ PLACÉ ICI, ET PAS PLUS BAS. Sous la ligne
+     *   `const compte = compteId ? … ; if (!compte) return … vers(res, '/')`
+     * ces routes seraient avalées : un administrateur n'a pas de compte
+     * joueur, il serait renvoyé à l'accueil sans un mot. Le symptôme aurait
+     * ressemblé à « le lot n'est pas déposé ».
+     *
+     * ⭐⭐⭐ ET QUAND LE JETON EST ABSENT OU FAUX, ON NE RÉPOND PAS : ON NE
+     * TRAITE PAS. Aucun `return`, donc la requête RETOMBE dans le flux
+     * normal et finit en 302 vers `/` — exactement, à l'octet près, ce que
+     * rend n'importe quelle adresse inexistante de ce service.
+     * ⛔ Un 404 aurait été une réponse UNIQUE à cette adresse : il aurait
+     *    annoncé « il y a quelque chose ici, mais pas pour vous ». Un 401
+     *    encore plus. La seule réponse qui n'apprend rien est celle que tout
+     *    le monde reçoit déjà.
+     */
+    if (p === '/admin' || p.startsWith('/admin/')) {
+      const attendu = jetonAdmin();
+      /**
+       * ⚠️ `trop()` rend VRAI quand le plafond est DÉPASSÉ. On traite donc
+       *    quand `!trop(...)`. Écrite à l'envers, cette condition n'aurait
+       *    ouvert la page qu'au-DELÀ du plafond : verte à l'usage normal,
+       *    donc invisible, et l'inverse exact de ce qui est écrit au-dessus.
+       * ⭐ Un plafond dépassé se comporte comme un jeton absent : on ne
+       *    traite pas, on retombe.
+       */
+      if (attendu && !trop(REGLES.admin)) {
+        const k = url.searchParams.get('k');
+        /**
+         * ⭐ L'ÉCHANGE : le jeton d'URL contre un cookie, puis on NETTOIE
+         *    l'URL par une redirection. Sans ce second geste, le secret
+         *    resterait dans la barre d'adresse, donc dans l'historique et
+         *    dans l'en-tête `Referer` de tout lien cliqué depuis la page.
+         *    ⚠️ La redirection est ce qui rend l'échange utile — pas le
+         *    cookie. Les deux ou rien.
+         */
+        if (m === 'GET' && p === '/admin' && k) {
+          if (!memeSecret(k, attendu)) return vers(res, '/');
+          return vers(res, '/admin', { 'set-cookie': poserCookieAdmin(creerJetonAdmin(attendu)) });
+        }
+
+        const ouvert = lireJetonAdmin(lireCookie(req.headers.cookie, COOKIE_ADMIN), attendu);
+        if (ouvert) {
+          if (m === 'POST' && p === '/admin/sortir')
+            return vers(res, '/', { 'set-cookie': effacerCookieAdmin() });
+
+          if (m === 'POST' && p === '/admin/chercher') {
+            const b = await corpsDe(req);
+            /**
+             * ⚠️ POST, ET PAS UNE RECHERCHE PAR `?q=`. Le terme cherché est
+             *    une adresse e-mail ou un portefeuille : dans une URL il
+             *    partirait dans l'historique, dans le journal du proxy et
+             *    dans le `Referer`. Une page d'exploitation qui dépose des
+             *    identités dans trois journaux annule ce qu'elle protège.
+             */
+            const t = chercher(String(b.get('q') ?? ''));
+            // ⛔ Le terme n'est PAS journalisé — seulement le fait qu'on a cherché.
+            console.log(`[admin] recherche (${t.quoi}) : ${t.trouve ? 'trouvé' : 'rien'}`);
+            return html(res, pageAdmin(forme(), parSite(), activite(), t));
+          }
+
+          if (m === 'GET' && p === '/admin')
+            return html(res, pageAdmin(forme(), parSite(), activite()));
+        }
+      }
+      // ⇩ aucune des conditions n'a rendu : on retombe dans le flux normal.
     }
 
     // ── L'entrée d'un jeu ───────────────────────────────────────────────
@@ -872,6 +962,38 @@ export function demarrer(port = PORT): void {
   // soit la PREMIÈRE chose lisible dans le journal, pas une ligne noyée
   // après « à l'écoute ».
   annoncerDemarrage();
+  /**
+   * 🔴🔴🔴 LOT 108 — ON OUVRE LA BASE **AVANT** LE PORT.
+   *
+   * CE QUE LA PARESSE A COÛTÉ, LE 07/08, À LA MINUTE PRÈS :
+   *   14:42  le lot 107 est déposé
+   *   14:44  le conteneur démarre, `/sante` répond, Coolify dit « healthy »
+   *   14:45  on cherche la preuve de la migration : elle n'y est pas
+   *   15:02  **première requête qui touche la base** — la migration tourne
+   * Pendant DIX-HUIT MINUTES, le service était en ligne, vert de partout, et
+   * `comptes` n'avait toujours pas sa colonne `site`. Et la conclusion tirée
+   * à 14:45 — « migration NON PROUVÉE » — était fausse pour la seule raison
+   * qu'elle était PRÉMATURÉE.
+   *
+   * ⭐⭐⭐ UNE MESURE PAS ENCORE MÛRE ET UNE MESURE PÉRIMÉE SE RESSEMBLENT
+   *    EXACTEMENT, ET ELLES SONT L'INVERSE L'UNE DE L'AUTRE. La seule
+   *    défense est de supprimer l'écart : ce qui doit être vrai au
+   *    démarrage se fait AU démarrage.
+   *
+   * Trois effets, et le troisième est le plus important :
+   *   ① le journal de migration sort juste sous le cadre de contrôle —
+   *     c'est-à-dire là où on le cherche ;
+   *   ② la fenêtre où la base a l'ancienne forme n'existe plus ;
+   *   ③ une migration qui échoue **empêche le port de s'ouvrir**, donc fait
+   *     ÉCHOUER le déploiement — au lieu de le laisser réussir sur une base
+   *     à l'ancienne forme. C'est aussi ce qui rend bruyant un volume monté
+   *     en lecture seule, puisque `base()` y écrit maintenant (voir db.ts).
+   *
+   * ⛔ NE PAS l'envelopper dans un `try`. Le repli tentant — « on démarre
+   *    quand même, on verra bien » — est exactement le repli qui a produit
+   *    la journée du 07/08.
+   */
+  base();
   serveur.listen(port, () => {
     console.log(`[identité] à l'écoute sur ${port}`);
     const j = [...jeux().keys()];

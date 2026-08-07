@@ -78,6 +78,23 @@ export const poserCookie = (jeton: string) =>
 export const COOKIE_ADMIN = 'veveid_adm';
 const DUREE_ADMIN_MS = 8 * 3600_000;   // une journée de travail, pas plus
 
+/**
+ * 🔴 LOT 108 — LE JETON D'EXPLOITATION, LU PARESSEUSEMENT (même piège que
+ * `secret()` ci-dessus : un `const X = process.env.Y` s'évalue à l'IMPORT).
+ *
+ * ⛔ AUCUN REPLI. Si `ADMIN_TOKEN` est absent, cette fonction rend la chaîne
+ *    vide et **la route `/admin` rend 404** — elle n'existe pas. Le repli
+ *    tentant (« pas de jeton posé ⇒ on ouvre en local ») est exactement le
+ *    repli qui ouvre : le jour où la variable est mal orthographiée dans
+ *    Coolify, la page d'administration devient publique et rien ne le dit.
+ *    Même raisonnement que le mode simulation du courriel.
+ *
+ * ⭐ 404 ET NON 401. Un « refusé » annonce qu'il y a quelque chose à
+ *    trouver ; un 404 ne distingue pas « mauvais jeton » de « cette route
+ *    n'existe pas sur ce service ».
+ */
+export const jetonAdmin = (): string => String(process.env.ADMIN_TOKEN ?? '').trim();
+
 const signAdmin = (v: string, jetonAdmin: string) =>
   createHmac('sha256', secret() + '|' + jetonAdmin).update(v).digest('base64url');
 

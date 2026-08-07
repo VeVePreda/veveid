@@ -1,3 +1,4 @@
+# ⚠️ DEPOT : VeVePreda/veveid   ·   CHEMIN : Dockerfile
 # Node 22 exécute le TypeScript nativement : aucune étape de build, aucune
 # dépendance à installer. C'est le principe fondateur du projet — chaque
 # dépendance évitée est une panne de déploiement évitée.
@@ -38,6 +39,7 @@ RUN node -e "await import('./src/db.ts'); \
   await import('./src/defi.ts'); \
   await import('./src/jetons.ts'); \
   await import('./src/jeux.ts'); \
+  await import('./src/admin.ts'); \
   await import('./src/vues.ts'); \
   await import('./server.ts'); \
   console.log('✅ tous les modules se chargent');" --input-type=module
