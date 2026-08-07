@@ -220,3 +220,104 @@ export async function fetchEnVente(wallet: string): Promise<Map<string, EnVente>
   const j = await get(`${BASE}/addresses/${wallet}/token-transfers`);
   return parseEnVente(j, wallet);
 }
+
+
+// ═════════════════════════════════════════════════════════════════════════
+// 🔥 LOT 106 — LIRE L'ESCROW, ET NON PLUS UN PORTEFEUILLE
+// ═════════════════════════════════════════════════════════════════════════
+//
+// 🔴 LE PROBLÈME QUE ÇA FERME. Tout ce qui précède part d'une adresse `0x…`
+// **que la personne doit taper**. Or elle ne la connaît pas : VeVe ne la lui
+// montre nulle part. Elle connaît son pseudo et le n° de mint de ses objets.
+// Le champ d'inscription lui demandait donc la seule chose qu'elle n'a pas —
+// et bloquait tout le reste.
+//
+// ⭐⭐⭐ LA TROUVAILLE : ON N'A PAS BESOIN DE TROUVER LE PORTEFEUILLE.
+// L'escrow VeVe est une adresse PUBLIQUE et UNIQUE : toute mise en vente y
+// dépose le jeton, et chaque ligne porte `from` — le portefeuille du vendeur.
+// La personne nomme deux de ses objets, les liste, on les retrouve dans le
+// flux, et **les deux `from` doivent être identiques**. Cette adresse EST son
+// portefeuille : découvert et prouvé du même geste.
+// ⭐ C'est plus SÛR que l'ancien parcours, pas seulement plus commode :
+// l'adresse ne se déclare plus, elle SORT de la preuve.
+//
+// ── Mesuré en direct le 07/08/2026, sans cookie et sans clé ──────────────
+//   · 300 lignes en 6 pages couvrent 99 minutes  ⇒ une fenêtre de 10 min
+//     tient largement dans UNE page de 50.
+//   · sur ces 300 lignes : 155 dépôts (mises en vente) et 145 sorties.
+//   · 0 paire (nom, édition) en double — mais 24 NOMS portés par plusieurs
+//     dépôts. 🔴 **La clé est la paire, jamais le nom.**
+//   · 44 % des dépôts sont des comics.
+//
+// ⚠️ `?type=ERC-721` est OBLIGATOIRE ici comme ailleurs : le filtre ERC-1155
+//    renvoie vide, en silence.
+export interface EntreeEscrow {
+  tokenId: string;
+  name: string;
+  edition: number | null;
+  /** 🔴 LE PORTEFEUILLE DU VENDEUR — la seule raison d'être de cette lecture. */
+  from: string;
+  at: string;
+  block: number;
+  /** Un comic déclaré doit être REFUSÉ EN LE DISANT, pas ignoré (cf. decouverte.ts). */
+  comic: boolean;
+}
+
+export function parseEntreesEscrow(payload: any, depuis?: Date): EntreeEscrow[] {
+  const out: EntreeEscrow[] = [];
+  for (const it of payload?.items ?? []) {
+    // ⛔ Seulement ce qui ENTRE dans l'escrow : une sortie est une annulation
+    // ou une vente, et ne prouve la propriété de personne.
+    if (lc(it?.to?.hash) !== ESCROW) continue;
+    if (lc(it?.token?.address_hash) !== VEVE_CONTRACT) continue;
+    const ti = it?.total?.token_instance ?? {};
+    const m = ti?.metadata ?? {};
+    const at = String(it.timestamp ?? '');
+    if (depuis && at && new Date(at) < depuis) continue;
+    const from = lc(it?.from?.hash);
+    if (!from) continue;
+    out.push({
+      tokenId: String(it?.total?.token_id ?? ti?.id ?? ''),
+      name: m.name ? String(m.name) : '',
+      edition: m.edition != null ? editionValide(m.edition) : null,
+      from, at, block: Number(it.block_number ?? 0),
+      comic: estUnComic(m, m?.image ?? it?.image_url),
+    });
+  }
+  return out;
+}
+
+/**
+ * ⭐⭐ UNE VUE PARTIELLE DOIT SE SAVOIR PARTIELLE — la même règle que
+ * `fetchAvoirs`, et elle compte davantage ici : si on s'arrête AVANT d'avoir
+ * remonté jusqu'à `depuis`, un dépôt réel peut être resté de l'autre côté de
+ * la borne. Le déclarer « pas encore vu » serait faux ; on dit `complet:false`
+ * et l'appelant s'abstient de conclure à l'échec.
+ *
+ * ⚠️ On remonte tant que la dernière ligne lue est POSTÉRIEURE à `depuis` :
+ * c'est le flux qui décide du nombre de pages, pas un nombre écrit en dur.
+ * Mesuré : 10 minutes ≈ 1 page. `maxPages` n'est qu'un garde-fou de boucle.
+ */
+export interface FluxEscrow { entrees: EntreeEscrow[]; complet: boolean }
+
+export async function fetchEntreesEscrow(
+  depuis: Date, maxPages = 8, lire: (u: string) => Promise<any> = get,
+): Promise<FluxEscrow> {
+  let url = `${BASE}/addresses/${ESCROW}/token-transfers?type=ERC-721`;
+  const entrees: EntreeEscrow[] = [];
+  for (let p = 0; p < maxPages; p++) {
+    const j = await lire(url);
+    entrees.push(...parseEntreesEscrow(j, depuis));
+    const brut = j?.items ?? [];
+    // Plus rien d'antérieur à lire : la dernière ligne de la page a déjà
+    // franchi la borne, donc tout ce qui suit est plus vieux encore.
+    const derniere = brut.length ? String(brut[brut.length - 1]?.timestamp ?? '') : '';
+    if (derniere && new Date(derniere) < depuis) return { entrees, complet: true };
+    const n = j?.next_page_params;
+    if (!n) return { entrees, complet: true };
+    url = `${BASE}/addresses/${ESCROW}/token-transfers?type=ERC-721&`
+      + new URLSearchParams(n as any).toString();
+  }
+  console.warn(`[escrow] ${maxPages} pages lues sans atteindre ${depuis.toISOString()} : vue partielle.`);
+  return { entrees, complet: false };
+}

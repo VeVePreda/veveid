@@ -101,6 +101,28 @@ CREATE TABLE IF NOT EXISTS defis (
 );
 CREATE INDEX IF NOT EXISTS idx_defis_wallet ON defis(wallet, etat);
 
+-- 🔥 LOT 106 — LA DÉCOUVERTE DE PORTEFEUILLE, SANS ADRESSE.
+-- ⚠️ TABLE À PART, ET C'EST DÉLIBÉRÉ. La table defis est indexée PAR
+--    PORTEFEUILLE et sa colonne wallet est NOT NULL : c'est sa nature, elle
+--    part d'une adresse connue. Ici l'adresse est le RÉSULTAT, pas l'entrée.
+--    Forcer les deux dans la même table demanderait de rendre wallet
+--    nullable, donc d'affaiblir la seule contrainte qui protège l'ancien
+--    parcours.
+--    ⭐ Deux protocoles qui partent de données différentes ne partagent pas
+--    leur table : ils partagent lier(), qui est le seul geste commun.
+-- ⚠️ paires = ce que la personne a DÉCLARÉ, scellé dès la création.
+--    vues   = ce que la chaîne a rendu : clé -> from, at, comic.
+-- 🔴 AUCUN ACCENT GRAVE DANS CE FICHIER : ce schéma est un littéral de
+--    gabarit, un accent grave le referme et le reste du schéma devient du
+--    code. Payé à l'écriture de ce lot même.
+CREATE TABLE IF NOT EXISTS decouvertes (
+  id TEXT PRIMARY KEY, compte_id TEXT NOT NULL,
+  paires TEXT NOT NULL, vues TEXT NOT NULL DEFAULT '{}',
+  wallet TEXT, cree TEXT NOT NULL, expire TEXT NOT NULL,
+  etat TEXT NOT NULL DEFAULT 'en_attente'
+);
+CREATE INDEX IF NOT EXISTS idx_decouvertes_compte ON decouvertes(compte_id, etat);
+
 -- ⭐ LES AVOIRS : les collectibles reellement detenus, relus depuis la
 --    chaine. C'est CE service qui les tient, une fois pour tous les jeux —
 --    donc un seul quota consomme chez l'explorateur, et une seule verite.

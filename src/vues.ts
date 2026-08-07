@@ -1,4 +1,6 @@
 import type { Avancement, Eligibles } from './defi.ts';
+import type { Avancement as AvancementDecouverte } from './decouverte.ts';
+import { NB_PAIRES, FENETRE_MIN as FENETRE_DECOUVERTE } from './decouverte.ts';
 import { PRIX_MIN, PRIX_MAX, NB_CIBLES, FENETRE_MIN } from './defi.ts';
 import type { Avoir, Compte } from './avoirs.ts';
 import { CHAMP_PIEGE, sceau } from './robots.ts';
@@ -265,11 +267,15 @@ export function pageCompte(
     <p class="doux" style="margin:8px 0 12px">Vérifiez le vôtre pour retrouver vos collectibles
     ici, recevoir des alertes sur <b>vos</b> pièces et apparaître au classement.
     Votre compte fonctionne très bien sans.</p>
-    <form method="post" action="/lier-portefeuille">
-      <input name="wallet" placeholder="0x…" inputmode="text" autocapitalize="off"
-        autocomplete="off" spellcheck="false" required>
-      <p style="margin:12px 0 0"><button>Vérifier mon portefeuille VeVe</button></p>
-    </form>
+    <p style="margin:12px 0 0"><a class="bouton" href="/decouvrir">Vérifier mon portefeuille VeVe</a></p>
+    <details style="margin-top:14px">
+      <summary class="doux">Je connais mon adresse 0x…</summary>
+      <form method="post" action="/lier-portefeuille" style="margin-top:10px">
+        <input name="wallet" placeholder="0x…" inputmode="text" autocapitalize="off"
+          autocomplete="off" spellcheck="false" required>
+        <p style="margin:12px 0 0"><button>Continuer avec cette adresse</button></p>
+      </form>
+    </details>
   </div>`}
 
   <div class="carte">
@@ -302,4 +308,119 @@ export function pageCompte(
       sur votre décision.</p></form>` : ''}
   </div>
   <p class="doux"><a href="/deconnexion">Se déconnecter</a></p>`);
+}
+
+
+// ═════════════════════════════════════════════════════════════════════════
+// 🔥 LOT 106 — LES DEUX ÉCRANS DE LA DÉCOUVERTE SANS ADRESSE
+// ═════════════════════════════════════════════════════════════════════════
+//
+// ⭐⭐ CE QUE CES DEUX ÉCRANS NE DEMANDENT PAS : l'adresse du portefeuille.
+// C'est tout l'objet du lot. La personne connaît son pseudo VeVe et le n° de
+// mint de ses objets ; elle ne connaît pas son adresse, VeVe ne la lui montre
+// nulle part. On lui demande ce qu'elle a.
+// 🔴 LA CONSIGNE DE PRIX RESTE, ET C'EST LA SEULE PROTECTION RÉELLE.
+// Preda a demandé le 20/07 de ne plus AVOUER qu'on ne peut pas vérifier le
+// prix — c'est fait, la phrase a disparu. ⛔ Mais l'AVEU et la CONSIGNE sont
+// deux choses : à un prix normal, un collectible mis en vente pour se vérifier
+// peut être ACHETÉ pour de bon, et la personne l'aurait perdu par notre faute.
+// ⚠️ Première version de cet écran : la consigne était partie avec l'aveu.
+// Retirer les deux d'un même geste, c'est confondre « ne pas se plaindre » et
+// « ne pas protéger ».
+// ⛔ L'ancien champ « 0x… » n'est pas SUPPRIMÉ, il est REPLIÉ derrière un
+//    « Je connais mon adresse ». Quelqu'un qui la connaît vraiment n'a aucune
+//    raison de faire deux mises en vente — et l'ancien parcours, éprouvé,
+//    continue de tourner.
+
+export function pageDecouvrir(erreur?: string, valeurs: { nom?: string; edition?: string }[] = []): string {
+  const champ = (i: number) => `<div class="carte">
+    <div class="rang"><b style="flex:1">Objet ${i + 1}</b></div>
+    <input name="nom" list="catalogue" placeholder="Nom du collectible"
+      value="${echapper(valeurs[i]?.nom ?? '')}"
+      autocapitalize="off" autocomplete="off" spellcheck="false" required>
+    <input name="edition" inputmode="numeric" pattern="[0-9]*" placeholder="N° de mint (ex. 253)"
+      value="${echapper(valeurs[i]?.edition ?? '')}" required style="margin-top:8px">
+  </div>`;
+  return page('Retrouver votre portefeuille', `${entete('Votre portefeuille', '1 / 2')}
+  ${erreur ? `<div class="err">${echapper(erreur)}</div>` : ''}
+  <div class="carte">
+    <p style="margin-top:0"><b>Vous n’avez pas besoin de votre adresse.</b></p>
+    <p class="doux" style="margin:8px 0 0">Nommez ${NB_PAIRES} de vos <b>collectibles</b> avec leur
+    numéro de mint, mettez-les en vente dans l’application VeVe, puis annulez.
+    Nous les reconnaîtrons sur la chaîne — et c’est <b>votre</b> portefeuille qu’ils désigneront.</p>
+    <p class="doux" style="margin:8px 0 0">⚠️ Des <b>collectibles</b>, pas des comics.
+    Et deux objets qui vous appartiennent tous les deux : c’est ce qui fait la preuve.</p>
+  </div>
+  <form method="post" action="/decouvrir">
+    ${CHAMP_PIEGE}
+    ${Array.from({ length: NB_PAIRES }, (_, i) => champ(i)).join('')}
+    <datalist id="catalogue"></datalist>
+    <p style="margin:12px 0 0"><button>Continuer</button></p>
+  </form>
+  <p class="doux">Vous aurez ${FENETRE_DECOUVERTE} minutes pour faire le geste.</p>`,
+  `<script>
+/* ⭐ L'AUTOCOMPLÉTION AIDE, ELLE NE BLOQUE JAMAIS — arbitrage Preda du 07/08.
+   Mesuré le même jour : le catalogue publié par veveprice ne couvre que 21 %
+   des collectibles réellement mis en vente ; le catalogue COMPLET en couvre
+   100 %. Un champ restreint refuserait donc 4 objets sur 5, et la personne le
+   lirait comme SA faute. La vérité est la chaîne, jamais cette liste.
+   ⛔ Et si la liste ne se charge pas, la page marche exactement pareil. */
+(async () => {
+  try {
+    const r = await fetch('/catalogue.json', { headers: { accept: 'application/json' } });
+    if (!r.ok) return;
+    const noms = await r.json();
+    const dl = document.getElementById('catalogue');
+    for (const n of noms) { const o = document.createElement('option'); o.value = n; dl.appendChild(o); }
+  } catch (e) { /* l'aide est absente, la saisie reste possible */ }
+})();
+</script>`);
+}
+
+export function pageDecouverte(a: AvancementDecouverte, id: string): string {
+  const lignes = a.paires.map((c) => `<div class="ligne">
+    <span class="coche ${c.vu ? 'vu' : ''}">${c.vu ? '✓' : ''}</span>
+    <span><b>${echapper(c.nom)}</b> <span class="doux">#${c.edition}</span></span>
+  </div>`).join('');
+  return page('Vérification', `${entete('Vérification', '2 / 2')}
+  <div class="carte">
+    <p style="margin-top:0"><b>Mettez ces ${a.total} objets en vente dans l’application VeVe</b>, puis annulez.</p>
+    <div class="err" style="background:#332b1e;border-color:var(--or)">
+      🔴 <b>Mettez-les à un prix très élevé : entre ${prix(PRIX_MIN)} et ${prix(PRIX_MAX)}.</b>
+      <p style="margin:6px 0 0">À un prix normal, quelqu’un peut les <b>acheter pour de bon</b>
+      pendant la vérification — et vous auriez perdu votre collectible par notre faute.
+      Personne n’achète à ${prix(PRIX_MIN)}.</p>
+    </div>
+    ${lignes}
+    <p class="doux" style="margin:10px 0 0">La chaîne met <b>une à deux minutes</b> à enregistrer un
+    geste : si ce n’est pas encore coché, ce n’est pas raté.</p>
+  </div>
+  <div class="carte">
+    <div class="rang"><b id="compte">${a.faits}/${a.total}</b>
+      <span class="jauge"><i id="barre" style="width:${(a.faits / a.total) * 100}%"></i></span></div>
+    <p class="doux" id="msg" style="margin:10px 0 0">${echapper(a.message)}</p>
+    <p class="doux" style="margin:6px 0 0">Il reste <b id="reste">${Math.ceil(a.restantSec / 60)}</b> minutes.</p>
+  </div>`, `<script>
+const id=${enJson(id)};
+async function sonder(){
+  try{
+    const r=await fetch('/decouverte.json?id='+encodeURIComponent(id),{headers:{accept:'application/json'}});
+    const a=await r.json();
+    document.getElementById('compte').textContent=a.faits+'/'+a.total;
+    document.getElementById('barre').style.width=(a.faits/a.total*100)+'%';
+    document.getElementById('reste').textContent=Math.ceil(a.restantSec/60);
+    document.getElementById('msg').textContent=a.message;
+    document.querySelectorAll('.coche').forEach((el,i)=>{
+      if(a.paires[i]&&a.paires[i].vu){el.classList.add('vu');el.textContent='✓';}
+    });
+    if(a.etat==='trouve'){location.href='/compte?msg=' + encodeURIComponent('Portefeuille trouvé et vérifié.');return;}
+    /* ⛔ Un refus RENVOIE au formulaire, il ne laisse pas devant une case qui
+       ne se cochera plus. Le message est déjà affiché au-dessus. */
+    if(a.etat==='deux_portefeuilles'||a.etat==='comic'||a.etat==='expire'){
+      setTimeout(()=>{location.href='/decouvrir?msg='+encodeURIComponent(a.message);},4000);return;}
+  }catch(e){}
+  setTimeout(sonder,10000);
+}
+setTimeout(sonder,10000);
+</script>`);
 }

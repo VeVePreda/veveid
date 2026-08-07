@@ -5,6 +5,11 @@ import { q1, fermer as fermerBase } from './src/db.ts';
 import { COOKIE, creerJeton, lireJeton, lireCookie } from './src/session.ts';
 import { autorise, adresse, purgerSeaux, REGLES } from './src/limite.ts';
 import { isWallet } from './src/collectchain.ts';
+import {
+  declarer, rafraichir as rafraichirDecouverte, decouverteActive, lireDecouverte,
+  avancement as avancementDecouverte, purgerDecouvertes,
+} from './src/decouverte.ts';
+import { nomsCollectibles } from './src/catalogue.ts';
 import { preparer, creerDefi, lireDefi, defiActif, rafraichir, avancement, lier, estVerifie, purgerDefis, NB_CIBLES } from './src/defi.ts';
 import { creerRelais, consommerRelais, purgerRelais, DESTINATIONS } from './src/relais.ts';
 import {
@@ -21,7 +26,7 @@ import { envoyer, courrielDeConnexion, dernierEnvoi, expediteur } from './src/co
 import { CHAMP_PIEGE, verdict as verdictRobot, adresseRelayee } from './src/robots.ts';
 import { signer, memeSecret, fabriquerCles } from './src/jetons.ts';
 import { jeux, jeuConnu, retourAutorise, origineDe } from './src/jeux.ts';
-import { accueil, pageChoisir, pageDefi, pageCompte, pageLienEnvoye, page } from './src/vues.ts';
+import { accueil, pageChoisir, pageDefi, pageCompte, pageLienEnvoye, page, pageDecouvrir, pageDecouverte} from './src/vues.ts';
 import { annoncerDemarrage } from './src/demarrage.ts';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -706,6 +711,68 @@ export const serveur = createServer(async (req, res) => {
      *    unique de fait : le jeu s'en sert pour poser SA session, et le
      *    jeton n'ouvre plus rien ensuite.
      */
+    // ═══════════════════════════════════════════════════════════════════
+    // 🔥 LOT 106 — RETROUVER SON PORTEFEUILLE SANS CONNAÎTRE SON ADRESSE
+    // ═══════════════════════════════════════════════════════════════════
+    // ⛔ CES ROUTES NE DEMANDENT JAMAIS `compte.wallet`, contrairement à
+    //    `/choisir` et `/verification` : ici l'adresse est ce qu'on CHERCHE.
+    //    C'est la seule différence de fond entre les deux parcours.
+    if (m === 'GET' && p === '/decouvrir') {
+      if (compte.verifie) return vers(res, '/compte');
+      if (decouverteActive(compte.id)) return vers(res, '/decouverte');
+      return html(res, pageDecouvrir(url.searchParams.get('msg') ?? undefined));
+    }
+    if (m === 'POST' && p === '/decouvrir') {
+      if (compte.verifie) return vers(res, '/compte');
+      if (trop(REGLES.verifier)) return html(res, pageDecouvrir('Trop de tentatives. Patientez une minute.'), 429);
+      const b = await corpsDe(req);
+      // ⚠️ Les champs arrivent APPARIÉS PAR LEUR ORDRE : nom[i] va avec
+      //    edition[i]. Un formulaire réordonné donnerait des paires fausses
+      //    mais plausibles — jamais retrouvées sur la chaîne, et illisibles
+      //    pour la personne. C'est le gabarit qui garantit l'ordre.
+      const noms = b.getAll('nom').map((x) => String(x));
+      const eds = b.getAll('edition').map((x) => String(x));
+      const paires = noms.map((nom, i) => ({ nom, edition: Number.parseInt(eds[i] ?? '', 10) }));
+      const r = await declarer(compte.id, paires);
+      if (!r.decouverte)
+        return html(res, pageDecouvrir(r.erreur, noms.map((nom, i) => ({ nom, edition: eds[i] }))), 400);
+      return vers(res, '/decouverte');
+    }
+    if (m === 'GET' && p === '/decouverte') {
+      if (compte.verifie) return vers(res, '/compte');
+      const d = decouverteActive(compte.id);
+      if (!d) return vers(res, '/decouvrir');
+      return html(res, pageDecouverte(avancementDecouverte(d), d.id));
+    }
+    if (m === 'GET' && p === '/decouverte.json') {
+      if (trop(REGLES.api)) return json(res, { erreur: 'trop de requêtes' }, 429);
+      const d = lireDecouverte(url.searchParams.get('id') ?? '');
+      // 🔴 On vérifie que la déclaration appartient à CE compte. Sans ça,
+      //    n'importe quel membre connecté sonderait celle d'un autre — et
+      //    apprendrait son portefeuille au moment où il est trouvé.
+      if (!d || d.compte_id !== compte.id) return json(res, { erreur: 'déclaration inconnue' }, 404);
+      const frais = await rafraichirDecouverte(d);
+      if (frais.etat === 'trouve' && frais.wallet && !estVerifie(compte.id)) {
+        // ⭐ `lier()` est le geste COMMUN aux deux parcours : c'est lui qui
+        //    refuse un portefeuille déjà pris par un autre compte. On ne le
+        //    réécrit pas ici.
+        const r = lier(compte.id, frais.wallet);
+        if (!r.ok) return json(res, { ...avancementDecouverte(frais), etat: 'deux_portefeuilles', message: r.message });
+        try { await synchroniser(compte.id, frais.wallet); } catch { /* on réessaiera */ }
+      }
+      return json(res, avancementDecouverte(frais));
+    }
+    /**
+     * ⭐ L'AIDE À LA SAISIE — et elle n'est QUE cela.
+     * ⛔ Cette liste ne refuse rien : elle propose. La vérité est la chaîne.
+     * ⚠️ Sans session, pas de liste : ce n'est pas une donnée secrète, mais
+     *    ce n'est pas non plus un service public à servir à tout venant.
+     */
+    if (m === 'GET' && p === '/catalogue.json') {
+      if (trop(REGLES.api)) return json(res, [], 429);
+      return json(res, await nomsCollectibles());
+    }
+
     if (m === 'GET' && p === '/apres') {
       /**
        * ⛔ ON NE TOUCHE PAS AU CONTRAT DES JEUX DANS CE LOT. `verifier()`
@@ -797,7 +864,7 @@ export function demarrer(port = PORT): void {
     console.log(`[identité] jeux déclarés : ${j.length ? j.join(', ') : 'AUCUN — variable JEUX vide'}`);
     // (clés et ID_SERVICE : dits par annoncerDemarrage() ci-dessus)
     const menage = setInterval(() => {
-      purgerSeaux(); purgerDefis(); purgerLiens(); purgerSessions(); purgerRelais();
+      purgerSeaux(); purgerDefis(); purgerDecouvertes(); purgerLiens(); purgerSessions(); purgerRelais();
       const n = purgerComptes();
       if (n) console.log(`[identité] ${n} compte(s) effacé(s) après le délai de grâce.`);
     }, 3600_000);
