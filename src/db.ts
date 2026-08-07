@@ -53,6 +53,14 @@ export function fermer(): void { try { _db?.close(); } catch { /* déjà fermée
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS comptes (
   id TEXT PRIMARY KEY,
+  -- 🔥 LOT 107 — LE SITE, ET L'ISOLATION QU'IL PORTE.
+  --    Arbitrage Preda du 07/08 : on prouve son portefeuille SUR CHAQUE SITE,
+  --    et il n'y a AUCUN lien entre les sites. L'unicite n'est donc plus
+  --    "un portefeuille = un compte" mais "un portefeuille = un compte PAR
+  --    SITE" (voir les index dans migrer()).
+  -- ⚠️ NOT NULL avec un defaut : une ligne sans site serait un compte que
+  --    personne ne peut retrouver, pas meme son proprietaire.
+  site TEXT NOT NULL DEFAULT 'veveprice',
   -- 🔴 wallet NULLABLE depuis le lot 89 : la porte d'entree est desormais
   --    l'e-mail, et la majorite des visiteurs n'ont PAS de portefeuille
   --    VeVe. L'unicite est portee par un index PARTIEL (voir migrer()),
@@ -244,7 +252,7 @@ export function migrer(db: DatabaseSync): string[] {
     // Les colonnes à recopier : celles que l'ANCIENNE table possède ET que
     // la nouvelle possède. Écrire la liste en dur ferait échouer la
     // migration le jour où une colonne aura été ajoutée entre-temps.
-    const cibles = ['id', 'wallet', 'email', 'verifie', 'verifie_le', 'cree_le', 'abonne_jusqu_a', 'supprime_le'];
+    const cibles = ['id', 'site', 'wallet', 'email', 'verifie', 'verifie_le', 'cree_le', 'abonne_jusqu_a', 'supprime_le'];
     const communes = cibles.filter((c) => a(c));
     db.exec('PRAGMA foreign_keys = OFF');
     try {
@@ -252,6 +260,7 @@ export function migrer(db: DatabaseSync): string[] {
 BEGIN IMMEDIATE;
 CREATE TABLE comptes_nouveau (
   id TEXT PRIMARY KEY,
+  site TEXT NOT NULL DEFAULT 'veveprice',
   wallet TEXT,
   email TEXT,
   verifie INTEGER NOT NULL DEFAULT 0,
@@ -299,14 +308,60 @@ COMMIT;`);
     journal.push('colonne retour ajoutée aux liens');
   }
 
-  const dejaLa = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all() as Array<{ name: string }>).map((x) => x.name));
-  if (!dejaLa.has('idx_comptes_wallet')) {
-    db.exec('CREATE UNIQUE INDEX idx_comptes_wallet ON comptes(wallet) WHERE wallet IS NOT NULL');
-    journal.push('index unique partiel sur wallet');
+  /**
+   * 🔥 LOT 107 — LA COLONNE `site` SUR UNE BASE DEJA EN PRODUCTION.
+   *
+   * ⭐⭐ CETTE MIGRATION NE PEUT PAS ECHOUER SUR LES DONNEES EXISTANTES, et il
+   *    faut savoir pourquoi : jusqu'ici un portefeuille etait unique pour TOUT
+   *    le service. Toutes les lignes recoivent donc le MEME site, et l'unicite
+   *    (site, wallet) est exactement l'ancienne unicite (wallet). Aucune ligne
+   *    ne peut se retrouver en double. On ne PARIE pas la-dessus : le controle
+   *    plus bas compte les lignes avant et apres.
+   * ⚠️ `SITE_DEFAUT` est lu ici, pas ecrit en dur : le jour ou le premier site
+   *    a espace membre n'est plus veveprice, la valeur suit.
+   */
+  /**
+   * 🔴 ON RELIT LES COLONNES ICI, ET C'EST OBLIGATOIRE. `a()` referme un
+   *    INSTANTANÉ pris tout en haut de cette fonction — avant l'échange de
+   *    table du lot 89, qui recrée `comptes` AVEC la colonne `site`. En se
+   *    fiant à l'instantané, on tentait un `ADD COLUMN site` sur une table qui
+   *    venait de naître avec : « duplicate column name ».
+   * ⭐⭐ Un instrument branché EN AMONT de ce qu'il mesure ne mesure pas l'état,
+   *    il mesure le passé. Même famille que le banc qui lit `dist/` avant le
+   *    build.
+   */
+  const maintenant = (db.prepare('PRAGMA table_info(comptes)').all() as Array<{ name: string }>).map((c) => c.name);
+  if (!maintenant.includes('site')) {
+    const defaut = (process.env.SITE_DEFAUT || 'veveprice').trim().toLowerCase();
+    const avant = (db.prepare('SELECT COUNT(*) AS n FROM comptes').get() as { n: number }).n;
+    db.exec(`ALTER TABLE comptes ADD COLUMN site TEXT NOT NULL DEFAULT '${defaut.replace(/'/g, "''")}'`);
+    const orphelins = (db.prepare("SELECT COUNT(*) AS n FROM comptes WHERE site IS NULL OR site=''").get() as { n: number }).n;
+    if (orphelins) throw new Error(`migration site : ${orphelins} compte(s) sans site — refus d'avancer`);
+    journal.push(`colonne site ajoutee (${avant} compte(s) rattache(s) a « ${defaut} »)`);
   }
-  if (!dejaLa.has('idx_comptes_email')) {
-    db.exec('CREATE UNIQUE INDEX idx_comptes_email ON comptes(email) WHERE email IS NOT NULL');
-    journal.push('index unique partiel sur email');
+
+  const dejaLa = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all() as Array<{ name: string }>).map((x) => x.name));
+  /**
+   * 🔴 LES ANCIENS INDEX GLOBAUX DOIVENT PARTIR, PAS COHABITER.
+   *    Les laisser en place tiendrait l'ancienne regle EN PLUS de la nouvelle :
+   *    le service refuserait toujours un portefeuille deja prouve sur un autre
+   *    site — c'est-a-dire exactement le defaut que ce lot corrige, sauf qu'il
+   *    serait devenu invisible dans le code (la nouvelle regle est ecrite, elle
+   *    a l'air appliquee, et c'est l'ancienne qui gagne).
+   */
+  for (const vieux of ['idx_comptes_wallet', 'idx_comptes_email']) {
+    if (dejaLa.has(vieux)) {
+      db.exec(`DROP INDEX ${vieux}`);
+      journal.push(`ancien index global ${vieux} retire`);
+    }
+  }
+  if (!dejaLa.has('idx_comptes_site_wallet')) {
+    db.exec('CREATE UNIQUE INDEX idx_comptes_site_wallet ON comptes(site, wallet) WHERE wallet IS NOT NULL');
+    journal.push('index unique partiel sur (site, wallet)');
+  }
+  if (!dejaLa.has('idx_comptes_site_email')) {
+    db.exec('CREATE UNIQUE INDEX idx_comptes_site_email ON comptes(site, email) WHERE email IS NOT NULL');
+    journal.push('index unique partiel sur (site, email)');
   }
   return journal;
 }

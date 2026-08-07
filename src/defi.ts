@@ -212,7 +212,14 @@ export async function creerDefi(
    * défense anti multi-comptes qu'une adresse e-mail ou une adresse IP,
    * parce qu'elle coûte cher à contourner — il faut une seconde collection.
    */
-  const deja = q1<{ id: string }>('SELECT id FROM comptes WHERE wallet=? AND verifie=1', w);
+  // 🔥 LOT 107 — par site, comme `lier()`. Un portefeuille prouvé ailleurs ne
+  // regarde pas ce site-ci.
+  const siteDuCompte = compteId
+    ? q1<{ site: string }>('SELECT site FROM comptes WHERE id=?', compteId)?.site
+    : undefined;
+  const deja = siteDuCompte
+    ? q1<{ id: string }>('SELECT id FROM comptes WHERE site=? AND wallet=? AND verifie=1', siteDuCompte, w)
+    : q1<{ id: string }>('SELECT id FROM comptes WHERE wallet=? AND verifie=1', w);
   if (deja && deja.id !== compteId)
     return { erreur: 'Ce portefeuille est déjà lié à un autre compte.' };
 
@@ -321,12 +328,61 @@ export async function rafraichir(
  *    sans preuve ne porte rien que quelqu'un puisse regretter. On l'efface.
  *    Une ligne AVEC e-mail appartient à quelqu'un : on refuse, et on le dit.
  */
-export function lier(compteId: string, wallet: string): { ok: boolean; message: string } {
+/**
+ * 🔴 LE REFUS ÉTAIT UN MUR — corrigé le 07/08/2026, signalé par Preda qui s'est
+ *    cogné dedans avec son propre compte.
+ *
+ * « Ce portefeuille est déjà lié à un autre compte. » est EXACT et INUTILE. Le
+ * cas de très loin le plus fréquent n'est pas l'usurpation, c'est **la même
+ * personne, revenue par une autre porte** : un compte créé en juillet avec une
+ * adresse, un compte créé aujourd'hui par le relais depuis veveprice avec une
+ * autre. La phrase la laisse devant rien, au moment précis où elle vient de
+ * mettre deux collectibles en vente pour se faire reconnaître.
+ *
+ * ⭐⭐ ET ELLE A LE DROIT DE SAVOIR : elle vient de PROUVER, sur la chaîne, sa
+ *    possession de ce portefeuille. On lui rend donc un INDICE sur l'adresse
+ *    qui le détient — assez pour reconnaître la sienne, pas assez pour en
+ *    apprendre une nouvelle.
+ * ⛔ On ne rend JAMAIS l'adresse entière, et jamais rien du tout si l'autre
+ *    compte n'a pas d'e-mail (il n'y aurait aucune porte à montrer).
+ */
+export function masquerEmail(e: string | null | undefined): string | null {
+  const s = String(e ?? '').trim();
+  const i = s.indexOf('@');
+  if (i < 1 || i === s.length - 1) return null;
+  const loc = s.slice(0, i); const dom = s.slice(i + 1);
+  const pt = dom.lastIndexOf('.');
+  if (pt < 1) return null;
+  const cache = (x: string) => (x.length <= 2 ? `${x[0]}•` : `${x[0]}${'•'.repeat(Math.min(3, x.length - 2))}${x[x.length - 1]}`);
+  return `${cache(loc)}@${cache(dom.slice(0, pt))}${dom.slice(pt)}`;
+}
+
+export function lier(compteId: string, wallet: string): { ok: boolean; message: string; indice?: string | null } {
   const w = wallet.toLowerCase();
+  /**
+   * 🔥 LOT 107 — LA RECHERCHE EST BORNÉE AU SITE DU COMPTE.
+   * ⛔ Sans le `site=?`, ce contrôle refuserait un portefeuille déjà prouvé sur
+   *    un AUTRE site — c'est-à-dire qu'il rétablirait, tout seul, le lien entre
+   *    les sites que ce lot supprime. Et il le ferait sans erreur : juste un
+   *    refus, sur un compte parfaitement légitime.
+   * ⚠️ Le site vient du compte, jamais d'un paramètre : personne ne doit
+   *    pouvoir choisir dans quel cloisonnement on va chercher.
+   */
+  const moi = q1<{ site: string }>('SELECT site FROM comptes WHERE id=?', compteId);
+  if (!moi) return { ok: false, message: 'Compte inconnu.' };
   const autre = q1<{ id: string; verifie: number; email: string | null }>(
-    'SELECT id, verifie, email FROM comptes WHERE wallet=? AND id<>?', w, compteId);
-  if (autre && (autre.verifie === 1 || autre.email))
-    return { ok: false, message: 'Ce portefeuille est déjà lié à un autre compte.' };
+    'SELECT id, verifie, email FROM comptes WHERE site=? AND wallet=? AND id<>?', moi.site, w, compteId);
+  if (autre && (autre.verifie === 1 || autre.email)) {
+    const indice = masquerEmail(autre.email);
+    return {
+      ok: false,
+      indice,
+      message: indice
+        ? `Ce portefeuille est déjà vérifié sur un autre compte — le plus souvent, c'est le vôtre, `
+          + `créé plus tôt. Connectez-vous avec l'adresse ${indice} et vous le retrouverez.`
+        : 'Ce portefeuille est déjà lié à un autre compte.',
+    };
+  }
   if (autre) run('UPDATE comptes SET wallet=NULL WHERE id=?', autre.id);
   run('UPDATE comptes SET wallet=?, verifie=1, verifie_le=? WHERE id=?', w, now(), compteId);
   run('UPDATE defis SET compte_id=? WHERE wallet=? AND compte_id IS NULL', compteId, w);

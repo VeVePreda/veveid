@@ -25,7 +25,7 @@ const ss = await import('../src/sessions.ts');
 const lm = await import('../src/lien_magique.ts');
 after(() => { db.fermer(); rmSync(dossier, { recursive: true, force: true }); });
 
-const compteNeuf = (mail: string) => av.creerOuLireCompteParEmail(mail);
+const compteNeuf = (mail: string) => av.creerOuLireCompteParEmail('veveprice', mail);
 
 test('un code d’échange ouvre une session, une fois et une seule', () => {
   const c = compteNeuf('echange@exemple.fr');

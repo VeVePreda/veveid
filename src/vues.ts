@@ -400,6 +400,13 @@ export function pageDecouverte(a: AvancementDecouverte, id: string): string {
       <span class="jauge"><i id="barre" style="width:${(a.faits / a.total) * 100}%"></i></span></div>
     <p class="doux" id="msg" style="margin:10px 0 0">${echapper(a.message)}</p>
     <p class="doux" style="margin:6px 0 0">Il reste <b id="reste">${Math.ceil(a.restantSec / 60)}</b> minutes.</p>
+  </div>
+  <div class="carte" id="porte" style="display:none">
+    <p style="margin-top:0"><b>Votre portefeuille a bien été reconnu.</b> Il est déjà
+    rattaché à un compte — le plus souvent, un compte que vous aviez créé plus tôt.</p>
+    <p style="margin:12px 0 0"><a class="bouton" href="/">Se connecter avec cette adresse</a></p>
+    <p class="doux" style="margin:8px 0 0">Vous pouvez annuler vos deux mises en vente :
+    la vérification est faite, elle n’a plus besoin d’elles.</p>
   </div>`, `<script>
 const id=${enJson(id)};
 async function sonder(){
@@ -416,6 +423,12 @@ async function sonder(){
     if(a.etat==='trouve'){location.href='/compte?msg=' + encodeURIComponent('Portefeuille trouvé et vérifié.');return;}
     /* ⛔ Un refus RENVOIE au formulaire, il ne laisse pas devant une case qui
        ne se cochera plus. Le message est déjà affiché au-dessus. */
+    /* 🔴 « déjà lié » NE RENVOIE PAS AU FORMULAIRE : refaire le geste ne peut
+       pas mieux marcher, le portefeuille est trouvé et il appartient à un
+       compte. On montre la PORTE — se connecter avec l'autre adresse. */
+    if(a.etat==='deja_lie'){
+      document.getElementById('porte').style.display='block';
+      document.getElementById('msg').textContent=a.message;return;}
     if(a.etat==='deux_portefeuilles'||a.etat==='comic'||a.etat==='expire'){
       setTimeout(()=>{location.href='/decouvrir?msg='+encodeURIComponent(a.message);},4000);return;}
   }catch(e){}

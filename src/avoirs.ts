@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { q, q1, run, now } from './db.ts';
+import { normaliserSite } from './sites.ts';
 import { fetchAvoirs } from './collectchain.ts';
 
 /**
@@ -115,17 +116,27 @@ export async function synchroniser(
  *    ouvert — c'est précisément le mur qu'on est en train de retirer.
  */
 export interface Compte {
-  id: string; wallet: string | null; email: string | null;
+  id: string; site: string; wallet: string | null; email: string | null;
   verifie: number; verifie_le: string | null;
   cree_le: string; abonne_jusqu_a: string | null; supprime_le: string | null;
 }
 
-export function creerOuLireCompte(wallet: string): Compte {
+/**
+ * 🔥 LOT 107 — TOUTES CES LECTURES SONT MAINTENANT PAR SITE.
+ * ⛔ Une requête sur `comptes` qui ne filtre pas sur `site` traverse la
+ *    cloison. Elle ne lèvera aucune erreur : elle rendra le compte d'un autre
+ *    site, avec son portefeuille — c'est-à-dire exactement le lien entre les
+ *    sites que Preda a demandé de supprimer.
+ * ⚠️ Le site est un paramètre EXPLICITE, jamais deviné à l'intérieur : c'est
+ *    l'appelant qui sait d'où vient la personne.
+ */
+export function creerOuLireCompte(site: string, wallet: string): Compte {
+  const s = normaliserSite(site);
   const w = wallet.trim().toLowerCase();
-  const existant = q1<Compte>('SELECT * FROM comptes WHERE wallet=?', w);
+  const existant = q1<Compte>('SELECT * FROM comptes WHERE site=? AND wallet=?', s, w);
   if (existant) return existant;
   const id = randomUUID();
-  run('INSERT INTO comptes (id, wallet, cree_le) VALUES (?,?,?)', id, w, now());
+  run('INSERT INTO comptes (id, site, wallet, cree_le) VALUES (?,?,?,?)', id, s, w, now());
   return q1<Compte>('SELECT * FROM comptes WHERE id=?', id)!;
 }
 
@@ -138,17 +149,19 @@ export function creerOuLireCompte(wallet: string): Compte {
  *    depuis ailleurs, et un compte en double créé par une majuscule est
  *    invisible jusqu'au jour où la personne ne retrouve plus ses données.
  */
-export function creerOuLireCompteParEmail(email: string): Compte {
+export function creerOuLireCompteParEmail(site: string, email: string): Compte {
+  const s = normaliserSite(site);
   const e = email.trim().toLowerCase();
-  const existant = q1<Compte>('SELECT * FROM comptes WHERE email=?', e);
+  const existant = q1<Compte>('SELECT * FROM comptes WHERE site=? AND email=?', s, e);
   if (existant) return existant;
   const id = randomUUID();
-  run('INSERT INTO comptes (id, email, cree_le) VALUES (?,?,?)', id, e, now());
+  run('INSERT INTO comptes (id, site, email, cree_le) VALUES (?,?,?,?)', id, s, e, now());
   return q1<Compte>('SELECT * FROM comptes WHERE id=?', id)!;
 }
 
-export const lireCompteParEmail = (email: string) =>
-  q1<Compte>('SELECT * FROM comptes WHERE email=?', email.trim().toLowerCase());
+export const lireCompteParEmail = (site: string, email: string) =>
+  q1<Compte>('SELECT * FROM comptes WHERE site=? AND email=?',
+    normaliserSite(site), email.trim().toLowerCase());
 
 /** ⭐ Le palier, en un seul endroit. Voir `access.mjs` côté veve-sites. */
 export const paliDe = (c: Compte | undefined) =>
@@ -169,9 +182,10 @@ export const lireCompte = (id: string) => q1<Compte>('SELECT * FROM comptes WHER
  * On répond donc « oui » seulement si l'autre compte a quelque chose à
  * perdre : une preuve faite (`verifie`) ou une adresse e-mail.
  */
-export const portefeuilleOccupe = (wallet: string, saufCompteId: string): boolean => {
+export const portefeuilleOccupe = (site: string, wallet: string, saufCompteId: string): boolean => {
   const autre = q1<{ verifie: number; email: string | null }>(
-    'SELECT verifie, email FROM comptes WHERE wallet=? AND id<>?', wallet.trim().toLowerCase(), saufCompteId);
+    'SELECT verifie, email FROM comptes WHERE site=? AND wallet=? AND id<>?',
+    normaliserSite(site), wallet.trim().toLowerCase(), saufCompteId);
   return !!autre && (autre.verifie === 1 || !!autre.email);
 };
 

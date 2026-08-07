@@ -142,7 +142,7 @@ test('un portefeuille vide ne peut pas jouer', async () => {
 // ═════════════════════════════════════════════════════════════════════════
 
 test('le joueur choisit ses objets, et le défi les retient', async () => {
-  const c = creerOuLireCompte(W);
+  const c = creerOuLireCompte('veveprice', W);
   const { defi, erreur } = await creerDefi(W, c.id, ['t1', 't3'], lireAvoirs(6), rienEnVente, enForme);
   assert.equal(erreur, undefined);
   assert.deepEqual(defi!.cibles.map((x) => x.tokenId), ['t1', 't3']);
@@ -155,13 +155,13 @@ test('🔴 LE CHOIX EST SCELLÉ — on ne le remanie pas tant qu’il court', as
    * choisit. Sans cela, un imposteur changerait d'objets jusqu'à tomber
    * sur deux pièces que le vrai détenteur liste par hasard.
    */
-  const c = creerOuLireCompte(W);
+  const c = creerOuLireCompte('veveprice', W);
   const r = await creerDefi(W, c.id, ['t0', 't2'], lireAvoirs(6), rienEnVente, enForme);
   assert.deepEqual(r.defi!.cibles.map((x) => x.tokenId), ['t1', 't3'], 'le défi en cours a été remplacé');
 });
 
 test('🔴 on ne fait PAS confiance au formulaire', async () => {
-  const c = creerOuLireCompte('0xcccccccccccccccccccccccccccccccccccccccc');
+  const c = creerOuLireCompte('veveprice','0xcccccccccccccccccccccccccccccccccccccccc');
   const w = '0xcccccccccccccccccccccccccccccccccccccccc';
   // Un objet qui n'est pas dans les avoirs.
   let r = await creerDefi(w, c.id, ['t1', 'inexistant'], lireAvoirs(6), rienEnVente, enForme);
@@ -182,7 +182,7 @@ test('🔴 on ne fait PAS confiance au formulaire', async () => {
 
 test('⭐ le nombre de tentatives est borné par jour', async () => {
   const w = '0xffffffffffffffffffffffffffffffffffffffff';
-  const c = creerOuLireCompte(w, 'UTC');
+  const c = creerOuLireCompte('veveprice', w, 'UTC');
   for (let i = 0; i < MAX_TENTATIVES_JOUR; i++) {
     const r = await creerDefi(w, c.id, ['t0', 't1'], lireAvoirs(6), rienEnVente, enForme);
     assert.ok(r.defi, `tentative ${i + 1} refusée à tort`);
@@ -200,7 +200,7 @@ test('⭐ le nombre de tentatives est borné par jour', async () => {
 // ═════════════════════════════════════════════════════════════════════════
 
 test('⭐ le geste est constaté, et la liaison est scellée', async () => {
-  const c = creerOuLireCompte(W);
+  const c = creerOuLireCompte('veveprice', W);
   const d = defiActif(W)!;
   const [c1, c2] = d.cibles;
 
@@ -222,7 +222,7 @@ test('🔴 un dépôt ANTÉRIEUR au défi ne vaut rien', async () => {
    * de désigner deux objets qu'on a listés la semaine dernière.
    */
   const w = '0x1010101010101010101010101010101010101010';
-  const c = creerOuLireCompte(w, 'UTC');
+  const c = creerOuLireCompte('veveprice', w, 'UTC');
   const { defi } = await creerDefi(w, c.id, ['t0', 't1'], lireAvoirs(4), rienEnVente, enForme);
   const vieux = new Date(Date.now() - 3 * 86_400_000).toISOString();
   const frais = await rafraichir(defi!, async () => [
@@ -234,7 +234,7 @@ test('🔴 un dépôt ANTÉRIEUR au défi ne vaut rien', async () => {
 
 test('un défi expiré est expiré, et il le reste', async () => {
   const w = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
-  const c = creerOuLireCompte(w, 'UTC');
+  const c = creerOuLireCompte('veveprice', w, 'UTC');
   const { defi } = await creerDefi(w, c.id, ['t0', 't1'], lireAvoirs(5), rienEnVente, enForme);
   run('UPDATE defis SET expire=? WHERE id=?', new Date(Date.now() - 1000).toISOString(), defi!.id);
   const frais = await rafraichir(lireDefi(defi!.id)!, async () => [depot('t0'), depot('t1')]);
@@ -243,7 +243,7 @@ test('un défi expiré est expiré, et il le reste', async () => {
 });
 
 test('🔴 un portefeuille = un compte', async () => {
-  const autre = creerOuLireCompte(W2);
+  const autre = creerOuLireCompte('veveprice', W2);
   const r = lier(autre.id, W);
   assert.equal(r.ok, false);
   assert.match(r.message, /déjà lié/);
@@ -291,14 +291,14 @@ test('🔴 LA LISTE DES JEUX EMPÊCHE LA REDIRECTION OUVERTE', () => {
 });
 
 test('un compte se crée en minuscules et une seule fois', () => {
-  const a = creerOuLireCompte('0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
-  const b = creerOuLireCompte('0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+  const a = creerOuLireCompte('veveprice','0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+  const b = creerOuLireCompte('veveprice','0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
   assert.equal(a.id, b.id);
   assert.equal(a.wallet, '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
 });
 
 test('⭐ les avoirs se synchronisent, et une vue partielle ne retire RIEN', async () => {
-  const c = creerOuLireCompte('0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1');
+  const c = creerOuLireCompte('veveprice','0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb1');
   const liste = (n: number) => Array.from({ length: n }, (_, i) => ({
     tokenId: `t${i}`, name: `Objet ${i}`, edition: i + 1,
     totalEditions: null, rarity: 'COMMON', series: null, image: null,
@@ -312,7 +312,7 @@ test('⭐ les avoirs se synchronisent, et une vue partielle ne retire RIEN', asy
 });
 
 test('une chaîne injoignable ne retire rien non plus', async () => {
-  const c = creerOuLireCompte('0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2');
+  const c = creerOuLireCompte('veveprice','0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb2');
   await synchroniser(c.id, c.wallet, async () => ({
     liste: [{ tokenId: 't', name: 'A', edition: 1, totalEditions: null, rarity: null, series: null, image: null }],
     complet: true,
@@ -323,7 +323,7 @@ test('une chaîne injoignable ne retire rien non plus', async () => {
 });
 
 test('l’abonnement se cumule au lieu de repartir de zéro', () => {
-  const c = creerOuLireCompte('0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb3');
+  const c = creerOuLireCompte('veveprice','0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb3');
   accorderAbonnement(c.id, 30);
   const apres1 = lireCompte(c.id)!.abonne_jusqu_a!;
   accorderAbonnement(c.id, 30);
@@ -337,7 +337,7 @@ test('⭐ la suppression laisse un DÉLAI DE GRÂCE', () => {
    * mois de codex disparaissent. Le délai ne coûte rien à personne — le
    * compte est déjà inaccessible pendant ce temps.
    */
-  const c = creerOuLireCompte('0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb4');
+  const c = creerOuLireCompte('veveprice','0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb4');
   assert.equal(demanderSuppression(c.id).ok, true);
   assert.ok(lireCompte(c.id)!.supprime_le, 'la demande doit être datée');
   assert.equal(demanderSuppression(c.id).ok, false, 'deux fois ne veut rien dire');
@@ -347,7 +347,7 @@ test('⭐ la suppression laisse un DÉLAI DE GRÂCE', () => {
 });
 
 test('effacer pour de bon ne laisse rien derrière', async () => {
-  const c = creerOuLireCompte('0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb5');
+  const c = creerOuLireCompte('veveprice','0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb5');
   await synchroniser(c.id, c.wallet, async () => ({
     liste: [{ tokenId: 't', name: 'A', edition: 1, totalEditions: null, rarity: null, series: null, image: null }],
     complet: true,

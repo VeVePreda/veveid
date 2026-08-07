@@ -25,7 +25,7 @@ const rl = await import('../src/relais.ts');
 after(() => { db.fermer(); rmSync(dossier, { recursive: true, force: true }); });
 
 test('un jeton de relais fait entrer, une fois et une seule', () => {
-  const c = av.creerOuLireCompteParEmail('relais@exemple.fr');
+  const c = av.creerOuLireCompteParEmail('veveprice','relais@exemple.fr');
   const jeton = rl.creerRelais(c.id, 'compte');
   assert.ok(jeton);
   const p = rl.consommerRelais(jeton!);
@@ -43,13 +43,13 @@ test('un jeton de relais fait entrer, une fois et une seule', () => {
 });
 
 test('la destination « verifier » mène au parcours de preuve', () => {
-  const c = av.creerOuLireCompteParEmail('relais2@exemple.fr');
+  const c = av.creerOuLireCompteParEmail('veveprice','relais2@exemple.fr');
   const p = rl.consommerRelais(rl.creerRelais(c.id, 'verifier')!);
   assert.equal(p.chemin, '/choisir');
 });
 
 test('🔴 une destination inconnue est REFUSÉE — pas de redirection ouverte', () => {
-  const c = av.creerOuLireCompteParEmail('relais3@exemple.fr');
+  const c = av.creerOuLireCompteParEmail('veveprice','relais3@exemple.fr');
   /**
    * ⭐⭐ LA TENTATION ÉTAIT D'ACCEPTER UN CHEMIN LIBRE — « c'est le site qui
    *    sait où il envoie ». Ce serait faire de cette route une redirection
@@ -63,7 +63,7 @@ test('🔴 une destination inconnue est REFUSÉE — pas de redirection ouverte'
 });
 
 test('un jeton périmé n’ouvre rien', () => {
-  const c = av.creerOuLireCompteParEmail('relais4@exemple.fr');
+  const c = av.creerOuLireCompteParEmail('veveprice','relais4@exemple.fr');
   const t0 = Date.now();
   const jeton = rl.creerRelais(c.id, 'compte', t0)!;
   const tard = t0 + (rl.DUREE_RELAIS_S + 1) * 1000;
@@ -71,7 +71,7 @@ test('un jeton périmé n’ouvre rien', () => {
 });
 
 test('le jeton n’est pas stocké en clair — une base lue ne fait entrer personne', () => {
-  const c = av.creerOuLireCompteParEmail('relais5@exemple.fr');
+  const c = av.creerOuLireCompteParEmail('veveprice','relais5@exemple.fr');
   const jeton = rl.creerRelais(c.id, 'compte')!;
   const lignes = db.q<{ empreinte: string }>('SELECT empreinte FROM relais');
   assert.equal(lignes.some((l) => l.empreinte === jeton), false,

@@ -77,6 +77,15 @@ export type EtatDecouverte =
   | 'deux_portefeuilles'
   /** Une des paires déclarées est un comic — refusé, et on le DIT. */
   | 'comic'
+  /**
+   * 🔴 Le portefeuille a bien été TROUVÉ, mais un autre compte le détient.
+   * ⛔ ÉTAT À PART, ET C'EST UNE CORRECTION : la première version renvoyait
+   *    'deux_portefeuilles' dans ce cas. La personne lisait « vos deux objets
+   *    viennent de deux portefeuilles » — ce qui est FAUX, ils venaient du
+   *    même. Un état recyclé pour une cause différente ne coûte rien au code
+   *    et ment à la seule personne qui le lit.
+   */
+  | 'deja_lie'
   | 'expire';
 
 export interface Paire { nom: string; edition: number }
@@ -310,6 +319,8 @@ const MESSAGES: Record<EtatDecouverte, string> = {
   deux_portefeuilles: "Ces deux objets ont été mis en vente depuis DEUX portefeuilles différents. "
     + "Pour prouver le vôtre, il faut deux objets qui vous appartiennent tous les deux.",
   comic: "Les comics ne conviennent pas pour cette vérification : choisissez deux COLLECTIBLES.",
+  // ⚠️ Remplacé au vol par le message de `lier()`, qui porte l'indice d'adresse.
+  deja_lie: 'Ce portefeuille est déjà vérifié sur un autre compte.',
   expire: 'Le délai est écoulé. Vous pouvez recommencer.',
 };
 

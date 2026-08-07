@@ -10,6 +10,7 @@ import {
   avancement as avancementDecouverte, purgerDecouvertes,
 } from './src/decouverte.ts';
 import { nomsCollectibles } from './src/catalogue.ts';
+import { SITE_DEFAUT, siteDeLOrigine, normaliserSite } from './src/sites.ts';
 import { preparer, creerDefi, lireDefi, defiActif, rafraichir, avancement, lier, estVerifie, purgerDefis, NB_CIBLES } from './src/defi.ts';
 import { creerRelais, consommerRelais, purgerRelais, DESTINATIONS } from './src/relais.ts';
 import {
@@ -278,7 +279,11 @@ export const serveur = createServer(async (req, res) => {
           return json(res, { erreur: 'adresse invalide' }, 400);
         if (d.jeton) {
           const lien = `${urlPublique()}/entrer-par-lien?j=${encodeURIComponent(d.jeton)}`;
-          const neuf = !lireCompteParEmail(email);
+          // ⚠️ « neuf » sert UNIQUEMENT au ton du courriel (bienvenue ou
+          //    retour). Il se lit donc dans le cloisonnement du site d'où vient
+          //    la demande : la même adresse peut être neuve ici et connue
+          //    ailleurs, et c'est exactement ce que l'isolation veut dire.
+          const neuf = !lireCompteParEmail(normaliserSite(site), email);
           const bilan = await envoyer(courrielDeConnexion(email.trim().toLowerCase(), lien, DUREE_MIN, neuf));
           if (!bilan.ok) console.error(`[inscription] envoi refusé : ${bilan.pourquoi}`);
           else console.log(`[inscription] lien envoyé (relais${site ? ' ' + site : ''})${bilan.simule ? ' SIMULÉ' : ''}`);
@@ -491,7 +496,7 @@ export const serveur = createServer(async (req, res) => {
       const wallet = String(b.get('wallet') ?? '').trim();
       if (!isWallet(wallet))
         return html(res, accueil(undefined, 'Adresse invalide : elle commence par 0x et fait 42 caractères.'), 400);
-      const c = creerOuLireCompte(wallet);
+      const c = creerOuLireCompte(siteDeLOrigine(retour) ?? SITE_DEFAUT(), wallet);
       /**
        * ⚠️ `Secure` AJOUTÉ AU LOT 89. Il manquait ici alors qu'il est
        *    présent dans `poserCookie()` (session.ts) depuis le début :
@@ -561,7 +566,7 @@ export const serveur = createServer(async (req, res) => {
 
       if (d.jeton) {
         const lien = `${urlPublique()}/entrer-par-lien?j=${encodeURIComponent(d.jeton)}`;
-        const neuf = !lireCompteParEmail(email);
+        const neuf = !lireCompteParEmail(siteDeLOrigine(retour) ?? SITE_DEFAUT(), email);
         const bilan = await envoyer(courrielDeConnexion(email.trim().toLowerCase(), lien, DUREE_MIN, neuf));
         if (!bilan.ok) console.error(`[inscription] envoi refusé : ${bilan.pourquoi}`);
         else console.log(`[inscription] lien envoyé${bilan.simule ? ' (SIMULÉ)' : ''}${bilan.id ? ` — ${bilan.id}` : ''}`);
@@ -606,7 +611,7 @@ export const serveur = createServer(async (req, res) => {
         return html(res, accueil(undefined, 'Trop de tentatives. Patientez quelques minutes.'), 429);
       const v = consommer(url.searchParams.get('j') ?? '');
       if (!v.email) return html(res, accueil(undefined, v.pourquoi), 400);
-      const c = creerOuLireCompteParEmail(v.email);
+      const c = creerOuLireCompteParEmail(siteDeLOrigine(v.retour) ?? SITE_DEFAUT(), v.email);
       const cookie = `${COOKIE}=${creerJeton(c.id)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000; Secure`;
 
       /**
@@ -656,7 +661,7 @@ export const serveur = createServer(async (req, res) => {
        *    contrôle au moment de la preuve — les deux sont utiles : ici on
        *    évite de faire mettre deux collectibles en vente pour rien.
        */
-      const occupe = portefeuilleOccupe(w, compte.id);
+      const occupe = portefeuilleOccupe(compte.site, w, compte.id);
       if (occupe) return vers(res, '/compte?msg=' + encodeURIComponent('Ce portefeuille est déjà lié à un autre compte.'));
       poserPortefeuille(compte.id, w);
       return vers(res, '/choisir');
@@ -757,7 +762,16 @@ export const serveur = createServer(async (req, res) => {
         //    refuse un portefeuille déjà pris par un autre compte. On ne le
         //    réécrit pas ici.
         const r = lier(compte.id, frais.wallet);
-        if (!r.ok) return json(res, { ...avancementDecouverte(frais), etat: 'deux_portefeuilles', message: r.message });
+        /**
+         * 🔴 UN ÉTAT À LUI, PAS UN ÉTAT RECYCLÉ. La première version renvoyait
+         *    'deux_portefeuilles' — la personne lisait « vos deux objets
+         *    viennent de deux portefeuilles différents », ce qui est FAUX : ils
+         *    venaient du même, c'est le compte qui est pris. Elle repartait
+         *    refaire un geste qui ne pouvait pas mieux marcher.
+         * ⭐ Et le message vient de `lier()`, qui sait QUI le détient et rend
+         *    un indice d'adresse masqué : le refus devient une porte.
+         */
+        if (!r.ok) return json(res, { ...avancementDecouverte(frais), etat: 'deja_lie', message: r.message });
         try { await synchroniser(compte.id, frais.wallet); } catch { /* on réessaiera */ }
       }
       return json(res, avancementDecouverte(frais));

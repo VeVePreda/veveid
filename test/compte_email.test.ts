@@ -171,21 +171,21 @@ test('les adresses manifestement impossibles sont refusées, les autres passent'
 // 3. LE COMPTE SANS PORTEFEUILLE
 // ═════════════════════════════════════════════════════════════════════════
 test('un compte par courriel existe, vaut member, et n’a pas de portefeuille', () => {
-  const c = av.creerOuLireCompteParEmail('membre@exemple.fr');
+  const c = av.creerOuLireCompteParEmail('veveprice','membre@exemple.fr');
   assert.equal(c.wallet, null);
   assert.equal(c.email, 'membre@exemple.fr');
   assert.equal(c.verifie, 0);
   assert.equal(av.paliDe(c), 'member');
   assert.equal(av.paliDe(undefined), 'visitor');
   // Deux fois la même adresse = le même compte, pas un doublon.
-  assert.equal(av.creerOuLireCompteParEmail('MEMBRE@Exemple.fr').id, c.id);
+  assert.equal(av.creerOuLireCompteParEmail('veveprice','MEMBRE@Exemple.fr').id, c.id);
   av.accorderAbonnement(c.id, 30);
   assert.equal(av.paliDe(av.lireCompte(c.id)!), 'crevette');
 });
 
 test('la page « Mon compte » ne tombe pas sans portefeuille', async () => {
   const { pageCompte } = await import('../src/vues.ts');
-  const c = av.creerOuLireCompteParEmail('page@exemple.fr');
+  const c = av.creerOuLireCompteParEmail('veveprice','page@exemple.fr');
   /**
    * 🔴 L'ancien `c.wallet.slice(0, 8)` levait ici. Ce n'était pas un
    *    affichage vide : c'était un 500 sur la PREMIÈRE page que voit un
@@ -214,17 +214,17 @@ test('la page « Mon compte » ne tombe pas sans portefeuille', async () => {
 
 test('un portefeuille abandonné ne réserve rien, un portefeuille détenu si', () => {
   const w = '0x' + 'c'.repeat(40);
-  const trace = av.creerOuLireCompte(w);                 // ancienne porte : ligne sans preuve
-  const membre = av.creerOuLireCompteParEmail('lieur@exemple.fr');
-  assert.equal(av.portefeuilleOccupe(w, membre.id), false, 'une trace abandonnée n’appartient à personne');
+  const trace = av.creerOuLireCompte('veveprice', w);                 // ancienne porte : ligne sans preuve
+  const membre = av.creerOuLireCompteParEmail('veveprice','lieur@exemple.fr');
+  assert.equal(av.portefeuilleOccupe('veveprice', w, membre.id), false, 'une trace abandonnée n’appartient à personne');
   av.poserPortefeuille(membre.id, w);
   assert.equal(av.lireCompte(membre.id)!.wallet, w);
   assert.equal(av.lireCompte(trace.id)!.wallet, null, 'la trace a cédé la place');
   /** ⛔ Poser n'est PAS prouver. */
   assert.equal(av.lireCompte(membre.id)!.verifie, 0);
 
-  const autre = av.creerOuLireCompteParEmail('autre@exemple.fr');
-  assert.equal(av.portefeuilleOccupe(w, autre.id), true, 'un portefeuille tenu par un compte avec e-mail est pris');
+  const autre = av.creerOuLireCompteParEmail('veveprice','autre@exemple.fr');
+  assert.equal(av.portefeuilleOccupe('veveprice', w, autre.id), true, 'un portefeuille tenu par un compte avec e-mail est pris');
 });
 
 // ═════════════════════════════════════════════════════════════════════════
