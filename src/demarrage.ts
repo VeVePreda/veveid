@@ -160,6 +160,51 @@ export function controlerDemarrage(): Constat[] {
     });
   }
 
+  // ── 2 bis. LE JETON D'EXPLOITATION (lot 108) ─────────────────────────
+  /**
+   * 🔴🔴 TROIS CAUSES, UN SEUL SYMPTOME — ET C'EST POUR CA QUE CE CONSTAT
+   * EXISTE.
+   *
+   * `/admin` est volontairement INDISCERNABLE d'une adresse qui n'existe pas :
+   * sans jeton valide, elle ne repond pas, elle retombe en 302 vers `/`. C'est
+   * la bonne conception (un 404 annoncerait qu'il y a quelque chose a trouver)
+   * — mais elle rend TROIS situations identiques vues du dehors :
+   *   ① le lot n'est pas depose ;
+   *   ② `ADMIN_TOKEN` n'est pas posee, ou son NOM est mal orthographie ;
+   *   ③ la valeur presentee dans `?k=` est fausse.
+   * Les trois donnent la meme redirection muette, et deux d'entre elles se
+   * reparent en dix secondes — a condition de savoir laquelle.
+   *
+   * ⭐⭐⭐ ON NE LEVE PAS L'AMBIGUITE COTE PUBLIC, ON LA LEVE COTE JOURNAL.
+   * Ajouter un `admin: true` a `/sante` dirait au monde entier que cette route
+   * existe — ce serait defaire, par confort, la propriete qu'on vient
+   * d'ecrire. Le cadre de demarrage, lui, n'est lisible que par qui a deja
+   * acces au conteneur. *Un service doit savoir dire lui-meme s'il est
+   * correctement installe* — a celui qui l'installe, pas a tout le monde.
+   *
+   * ⚠️ `attention`, pas `grave` : un service sans page d'exploitation
+   * fonctionne parfaitement pour ses utilisateurs. Ce qu'on perd, c'est la
+   * capacite a MESURER le jour ou quelque chose ira mal.
+   */
+  if (!(process.env.ADMIN_TOKEN ?? '').trim()) {
+    c.push({
+      gravite: 'attention',
+      titre: "ADMIN_TOKEN absente : /admin n'existe pas",
+      detail: "La page d'exploitation repondra comme une adresse inconnue (302 vers /), "
+        + "ce qui ressemble EXACTEMENT a « le lot n'est pas depose ». "
+        + "Posez ADMIN_TOKEN dans les variables d'environnement Coolify (24 octets "
+        + "au hasard), puis redemarrez. ⛔ Jamais dans le depot, jamais dans un zip.",
+    });
+  } else {
+    c.push({
+      gravite: 'ok',
+      titre: "Page d'exploitation : /admin?k=<ADMIN_TOKEN>",
+      // ⛔ On dit qu'un jeton est pose, JAMAIS lequel ni sa longueur : une
+      //    longueur affichee est une information gratuite pour qui attaque.
+      detail: 'jeton pose ; la session dure 8 h et le cookie ne quitte pas /admin',
+    });
+  }
+
   // ── 3. LES JEUX DÉCLARÉS ─────────────────────────────────────────────
   // ⚠️ `JEUX` n'est pas un confort : c'est la LISTE BLANCHE D'ORIGINES qui
   // empêche ce service d'être une redirection ouverte. Vide, il est inutile ;

@@ -180,3 +180,45 @@ test('⭐ /sante déclare la forme de la base, sans rien révéler', async () =>
   //    personne, la population si.
   assert.deepEqual(Object.keys(s.base).sort(), ['migrations', 'ouverte', 'site_present']);
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// LE CADRE DE DÉMARRAGE DIT SI LE JETON EST POSÉ
+// ═══════════════════════════════════════════════════════════════════════
+/**
+ * 🔴🔴 TROIS CAUSES, UN SEUL SYMPTÔME. `/admin` sans jeton valide rend la même
+ * chose qu'une adresse inexistante — c'est voulu, et ça rend « lot non
+ * déposé », « variable mal orthographiée » et « mauvaise valeur »
+ * indiscernables du dehors. Le cadre de démarrage les sépare, côté journal.
+ * ⛔ Et JAMAIS côté `/sante` : ce serait annoncer publiquement que la route
+ *    existe, donc défaire par confort ce qu'on vient d'écrire.
+ */
+test('⭐ le démarrage DIT si ADMIN_TOKEN est posée — et jamais sa valeur', async () => {
+  const { controlerDemarrage } = await import('../src/demarrage.ts');
+  const avant = process.env.ADMIN_TOKEN;
+
+  process.env.ADMIN_TOKEN = '';
+  const sans = controlerDemarrage().find((x) => x.titre.includes('ADMIN_TOKEN'));
+  assert.ok(sans, 'une variable absente doit produire un constat');
+  assert.equal(sans!.gravite, 'attention',
+    'un service sans page d\'exploitation sert parfaitement ses utilisateurs');
+  assert.match(sans!.detail, /le lot n'est pas depose/i,
+    'le constat doit nommer la confusion qu\'il existe pour lever');
+
+  process.env.ADMIN_TOKEN = JETON;
+  const avec = controlerDemarrage().find((x) => x.titre.includes('/admin'));
+  assert.ok(avec && avec.gravite === 'ok');
+  const tout = JSON.stringify(controlerDemarrage());
+  assert.ok(!tout.includes(JETON), '⛔ le jeton ne doit JAMAIS être imprimé');
+  assert.ok(!tout.includes(String(JETON.length)),
+    '⛔ ni sa longueur — c\'est une information gratuite pour qui attaque');
+
+  process.env.ADMIN_TOKEN = avant;
+});
+
+test('⛔ /sante n\'annonce PAS l\'existence de /admin', async () => {
+  const s = await (await va('/sante')).json() as any;
+  const brut = JSON.stringify(s);
+  assert.ok(!brut.includes('admin'),
+    'la sonde est publique : y mettre un drapeau admin annoncerait la route');
+  assert.ok(!brut.includes(JETON));
+});

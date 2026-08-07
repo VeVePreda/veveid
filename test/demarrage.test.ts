@@ -130,7 +130,21 @@ test('ID_SERVICE et SESSION_SECRET absents : attention, jamais grave', () => {
   avec({ ...BON, ID_SERVICE: undefined, SESSION_SECRET: undefined, DB_PATH: join(d, 'veve-id.db') }, () => {
     const c = controlerDemarrage();
     assert.deepEqual(graves(c), [], 'ces deux-là gênent, ils n’empêchent pas de servir');
-    assert.equal(c.filter((x) => x.gravite === 'attention').length, 2);
+    /**
+     * ⚠️ LOT 108 — CE BANC COMPTAIT LES « attention » (== 2). Il a rougi en
+     * ajoutant le constat d'`ADMIN_TOKEN`, alors que RIEN de ce qu'il dit
+     * dans son titre n'avait bougé.
+     * ⭐⭐ UN TOTAL DÉRIVE AVEC LE CATALOGUE ; UNE IDENTITÉ NE DÉRIVE PAS.
+     *    Son intention est « CES DEUX-LÀ sont attention, jamais grave » —
+     *    pas « il y a exactement deux attentions dans le service ». Un
+     *    comptage rougit à chaque ajout légitime, et on finit par le relever
+     *    sans regarder : c'est un banc qui se désarme tout seul.
+     * ⇒ On vérifie les DEUX constats nommés, et on laisse le service en
+     *    porter d'autres. Même correctif que le plafond du lot 105.
+     */
+    const attentions = c.filter((x) => x.gravite === 'attention');
+    assert.equal(contient(attentions, 'ID_SERVICE'), true);
+    assert.equal(contient(attentions, 'SESSION_SECRET'), true);
   });
 });
 
