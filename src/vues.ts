@@ -529,6 +529,22 @@ const blocRecherche = (t?: Trouvaille) => {
         ${c.indice_wallet ? `indice portefeuille : <b>${echapper(c.indice_wallet)}</b><br>` : ''}
         ${c.abonne_jusqu_a ? `abonné jusqu’au ${echapper(c.abonne_jusqu_a.slice(0, 10))}<br>` : ''}
         ${c.en_grace ? `⚠️ suppression demandée le ${echapper(c.en_grace.slice(0, 10))}` : ''}</p>
+      ${/* 🔴 LOT 122 — LE SEUL GESTE QUI ÉCRIT DE TOUTE CETTE PAGE.
+            ⭐ Il est POSÉ PAR COMPTE, et pas une fois en haut de page : un
+            même e-mail a un compte PAR SITE, et un formulaire unique aurait
+            demandé de retaper le site — donc de le choisir à l'aveugle, donc
+            de se tromper de compte sans le voir.
+            ⚠️ `value` en dur et pas un champ libre pour le site : il vient du
+            résultat, il n'est jamais saisi. Ce qu'on ne tape pas ne se
+            trompe pas.
+            ⛔ `min`/`max` côté HTML NE PROTÈGE RIEN — c'est du confort. La
+            borne qui compte est dans `server.ts`, et elle y est. */ ''}
+      <form method="post" action="/admin/abonner" class="rang" style="margin-top:10px;gap:8px">
+        <input type="hidden" name="ref" value="${echapper(c.ref)}">
+        <input name="jours" type="number" min="1" max="400" value="30"
+               style="width:90px" aria-label="jours d’abonnement">
+        <button class="principal">Accorder</button>
+      </form>
     </div>`).join('');
   }
   return `<h2>Chercher un compte</h2>
@@ -544,17 +560,29 @@ const blocRecherche = (t?: Trouvaille) => {
 };
 
 /**
- * ⚠️ LE TERME CHERCHÉ N'EST PAS RÉAFFICHÉ. Il vient d'un POST (donc il n'est
- *    ni dans l'URL, ni dans l'historique, ni dans le `Referer`) : le remettre
- *    dans le HTML le redéposerait dans les trois. Le résultat suffit à savoir
- *    ce qu'on a demandé.
+ * ⚠️ LE TERME CHERCHÉ N'EST TOUJOURS PAS RÉAFFICHÉ, et ce lot a failli le
+ *    changer. Il vient d'un POST (donc il n'est ni dans l'URL, ni dans
+ *    l'historique, ni dans le `Referer`) : le remettre dans le HTML le
+ *    redéposerait dans les trois.
+ *
+ * 🔴 LOT 122 — MA PREMIÈRE VERSION LE RENVOYAIT DANS UN CHAMP CACHÉ, pour que
+ *    le formulaire d'abonnement sache sur quel compte il portait. Je m'étais
+ *    convaincu que la règle ne visait que l'URL et l'historique, qu'un champ
+ *    caché n'atteint pas. `test/admin.test.ts` a dit non : il lit le HTML
+ *    RENDU et exige qu'aucune identité n'y figure, quel que soit le chemin.
+ * ⭐⭐⭐ *Une règle vérifiée sur la SORTIE ne se contourne pas par un
+ *    raisonnement sur son intention.* Le formulaire porte donc une RÉFÉRENCE
+ *    OPAQUE (`c.ref`, l'uuid interne) : ni e-mail, ni portefeuille, rien à
+ *    apprendre, et sans valeur hors d'une session d'exploitation.
  */
 export function pageAdmin(
-  f: Forme, sites: LigneSite[], a: Activite, t?: Trouvaille,
+  f: Forme, sites: LigneSite[], a: Activite, t?: Trouvaille, message?: string,
 ): string {
   return page('Exploitation', `${entete('Exploitation', 'veve-id')}
-  <div class="carte doux" style="margin-top:0">Cette page <b>regarde</b> : elle ne
-  modifie rien et n’affiche aucune adresse en clair.</div>
+  <div class="carte doux" style="margin-top:0">Cette page <b>regarde</b>, et depuis
+  le lot 122 elle peut <b>accorder un abonnement</b> — le seul geste qui écrit.
+  Elle n’affiche toujours aucune adresse en clair.</div>
+  ${!message ? '' : `<div class="carte"><b>${echapper(message)}</b></div>`}
   ${blocRecherche(t)}
   ${blocForme(f)}
   ${blocSites(sites)}

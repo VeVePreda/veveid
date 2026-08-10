@@ -181,44 +181,104 @@ test('⭐ /sante déclare la forme de la base, sans rien révéler', async () =>
   assert.deepEqual(Object.keys(s.base).sort(), ['migrations', 'ouverte', 'site_present']);
 });
 
-// ═══════════════════════════════════════════════════════════════════════
-// LE CADRE DE DÉMARRAGE DIT SI LE JETON EST POSÉ
-// ═══════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// 🔴🔴🔴 LOT 122 — LE SEUL GESTE QUI ÉCRIT
+// ═══════════════════════════════════════════════════════════════════════════
 /**
- * 🔴🔴 TROIS CAUSES, UN SEUL SYMPTÔME. `/admin` sans jeton valide rend la même
- * chose qu'une adresse inexistante — c'est voulu, et ça rend « lot non
- * déposé », « variable mal orthographiée » et « mauvaise valeur »
- * indiscernables du dehors. Le cadre de démarrage les sépare, côté journal.
- * ⛔ Et JAMAIS côté `/sante` : ce serait annoncer publiquement que la route
- *    existe, donc défaire par confort ce qu'on vient d'écrire.
+ * CE QUE CE BANC GARDE, ET POURQUOI IL COMPTE PLUS QUE SA TAILLE.
+ * `accorderAbonnement()` existait depuis des semaines, importée par
+ * `server.ts` et appelée par PERSONNE en dehors des tests. Le palier
+ * `crevette` se gagne par `abonne_jusqu_a > maintenant` : AUCUN COMPTE AU
+ * MONDE ne pouvait donc l'atteindre, et tout ce que veveprice vend était
+ * fermé à 100 % des humains comme à 100 % des robots.
+ * ⭐⭐⭐ *Une protection qui bloque tout le monde n'est pas stricte, elle est
+ * cassée* — et de l'extérieur les deux se ressemblent exactement.
+ * ⛔ Le piège qui l'a fait durer : un IMPORT SANS APPEL. Un `grep` trouvait
+ *   la fonction dans le fichier des routes, ce qui suffisait à conclure
+ *   qu'elle était branchée. *Un import sans appel met la preuve au mauvais
+ *   endroit.*
  */
-test('⭐ le démarrage DIT si ADMIN_TOKEN est posée — et jamais sa valeur', async () => {
-  const { controlerDemarrage } = await import('../src/demarrage.ts');
-  const avant = process.env.ADMIN_TOKEN;
+test('🔴 le geste d’abonnement fait passer le palier à crevette', async () => {
+  const cookie = await ouvrirSession();
+  const av = await import('../src/avoirs.ts');
 
-  process.env.ADMIN_TOKEN = '';
-  const sans = controlerDemarrage().find((x) => x.titre.includes('ADMIN_TOKEN'));
-  assert.ok(sans, 'une variable absente doit produire un constat');
-  assert.equal(sans!.gravite, 'attention',
-    'un service sans page d\'exploitation sert parfaitement ses utilisateurs');
-  assert.match(sans!.detail, /le lot n'est pas depose/i,
-    'le constat doit nommer la confusion qu\'il existe pour lever');
+  assert.equal(av.paliDe(av.lireCompte('juillet')), 'member', 'avant : membre simple');
 
-  process.env.ADMIN_TOKEN = JETON;
-  const avec = controlerDemarrage().find((x) => x.titre.includes('/admin'));
-  assert.ok(avec && avec.gravite === 'ok');
-  const tout = JSON.stringify(controlerDemarrage());
-  assert.ok(!tout.includes(JETON), '⛔ le jeton ne doit JAMAIS être imprimé');
-  assert.ok(!tout.includes(String(JETON.length)),
-    '⛔ ni sa longueur — c\'est une information gratuite pour qui attaque');
+  const r = await poste('/admin/abonner', 'ref=juillet&jours=30', cookie);
+  assert.equal(r.status, 200);
+  assert.equal(av.paliDe(av.lireCompte('juillet')), 'crevette', 'après : abonné');
 
-  process.env.ADMIN_TOKEN = avant;
+  // ⭐ ET LE CUMUL : un second geste PROLONGE, il ne remet pas à zéro. Sans ce
+  //   contrôle, « accorder 30 jours » à quelqu'un qui en a déjà 20 lui en
+  //   retirerait 20 — une erreur invisible, qui ne se voit qu'un mois après.
+  const fin1 = av.lireCompte('juillet')!.abonne_jusqu_a!;
+  await poste('/admin/abonner', 'ref=juillet&jours=30', cookie);
+  assert.ok(av.lireCompte('juillet')!.abonne_jusqu_a! > fin1, 'le second geste prolonge');
 });
 
-test('⛔ /sante n\'annonce PAS l\'existence de /admin', async () => {
-  const s = await (await va('/sante')).json() as any;
-  const brut = JSON.stringify(s);
-  assert.ok(!brut.includes('admin'),
-    'la sonde est publique : y mettre un drapeau admin annoncerait la route');
-  assert.ok(!brut.includes(JETON));
+test('⛔ la durée est bornée, et les bornes sont refusées côté serveur', async () => {
+  const cookie = await ouvrirSession();
+  const av = await import('../src/avoirs.ts');
+  const avant = av.lireCompte('juillet')!.abonne_jusqu_a;
+
+  // ⚠️ `min`/`max` dans le HTML est du CONFORT : un POST à la main l'ignore.
+  //    La borne qui protège est celle du serveur, et c'est elle qu'on éprouve.
+  for (const corps of ['ref=juillet&jours=0', 'ref=juillet&jours=401',
+                       'ref=juillet&jours=abc', 'ref=juillet&jours=1.5',
+                       'ref=juillet&jours=-30', 'ref=juillet']) {
+    const r = await poste('/admin/abonner', corps, cookie);
+    assert.equal(r.status, 200, corps);
+    assert.equal(av.lireCompte('juillet')!.abonne_jusqu_a, avant,
+      `⛔ « ${corps} » ne doit RIEN changer`);
+  }
+});
+
+test('⛔ une référence inconnue ne crée rien et le dit', async () => {
+  const cookie = await ouvrirSession();
+  const r = await poste('/admin/abonner', 'ref=personne&jours=30', cookie);
+  const corps = await r.text();
+  assert.ok(corps.includes('Compte inconnu'), 'le message le dit');
+});
+
+/**
+ * ⭐⭐⭐ LE TÉMOIN NON DÉSARMÉ, et c'est le contrôle le plus important des
+ * quatre : sans lui, les trois précédents prouveraient seulement que le geste
+ * marche — jamais qu'il est FERMÉ. Une route qui écrit en base et qu'on
+ * atteint sans session d'exploitation, c'est un abonnement gratuit pour qui
+ * connaît l'adresse. C'est exactement ce qu'était la « démo » du 01/08.
+ */
+test('⛔ sans session d’exploitation, le geste n’écrit rien', async () => {
+  const av = await import('../src/avoirs.ts');
+  const avant = av.lireCompte('juillet')!.abonne_jusqu_a;
+  const r = await poste('/admin/abonner', 'ref=juillet&jours=30', '');
+  assert.notEqual(r.status, 200, 'la route ne doit pas répondre 200 sans cookie');
+  assert.equal(av.lireCompte('juillet')!.abonne_jusqu_a, avant,
+    '⛔ la base ne doit PAS avoir bougé');
+});
+
+/**
+ * ⛔ ET LA RÈGLE QUI A FAIT ÉCHOUER MA PREMIÈRE VERSION : après le geste, la
+ * page ne doit toujours contenir AUCUNE identité en clair. Mon formulaire
+ * portait l'e-mail dans un champ caché ; il porte désormais une référence
+ * opaque. Ce contrôle est ce qui empêche d'y revenir sans s'en apercevoir.
+ */
+test('⛔ après le geste, toujours aucune adresse en clair', async () => {
+  const cookie = await ouvrirSession();
+  const r = await poste('/admin/abonner', 'ref=juillet&jours=30', cookie);
+  const corps = await r.text();
+  assert.ok(!corps.includes(EMAIL), 'aucune adresse e-mail');
+  assert.ok(!corps.includes(W), 'aucun portefeuille');
+});
+
+/**
+ * ⭐ Et le formulaire existe VRAIMENT dans la page de recherche : sans lui,
+ * tout ce qui précède mesurerait une route que personne ne peut atteindre —
+ * la moitié « qui écrit » d'un circuit dont la moitié « qui appelle »
+ * manquerait. C'est la faute que ce lot répare, refaite d'un cran.
+ */
+test('⭐ la page de recherche PORTE le formulaire d’abonnement', async () => {
+  const cookie = await ouvrirSession();
+  const corps = await (await poste('/admin/chercher', `q=${encodeURIComponent(W)}`, cookie)).text();
+  assert.ok(corps.includes('/admin/abonner'), 'le formulaire est là');
+  assert.ok(/name="ref" value="[^"]+"/.test(corps), 'et il porte une référence');
 });

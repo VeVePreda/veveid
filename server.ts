@@ -21,6 +21,10 @@ import {
   creerOuLireCompte, creerOuLireCompteParEmail, lireCompteParEmail, lireCompte,
   synchroniser, avoirsDe,
   dernierSync, estAbonne, paliDe, portefeuilleOccupe, poserPortefeuille, noterAcces, demanderSuppression, annulerSuppression,
+  // 🔴 LOT 122 — `accorderAbonnement` ÉTAIT IMPORTÉE ICI ET APPELÉE NULLE
+  //   PART. Elle l'est désormais par `POST /admin/abonner`. `trouverCompte`
+  //   l'accompagne : la page transporte la QUESTION (site + terme), pas un
+  //   identifiant interne.
   purgerComptes, accorderAbonnement,
 } from './src/avoirs.ts';
 import { demander, consommer, purgerLiens, DUREE_MIN } from './src/lien_magique.ts';
@@ -553,6 +557,70 @@ export const serveur = createServer(async (req, res) => {
             // ⛔ Le terme n'est PAS journalisé — seulement le fait qu'on a cherché.
             console.log(`[admin] recherche (${t.quoi}) : ${t.trouve ? 'trouvé' : 'rien'}`);
             return html(res, pageAdmin(forme(), parSite(), activite(), t));
+          }
+
+          /**
+           * ═══════════════════════════════════════════════════════════════
+           * 🔴🔴🔴 LOT 122 — ACCORDER UN ABONNEMENT. LE CIRCUIT SE FERME.
+           * ═══════════════════════════════════════════════════════════════
+           * CE QUE ÇA RÉPARE, ET C'EST PLUS GRAND QU'UNE FONCTIONNALITÉ.
+           * `accorderAbonnement()` existe depuis des semaines et n'était
+           * appelée par PERSONNE en dehors des tests. Le palier `crevette`
+           * se gagne par `abonne_jusqu_a > maintenant` — donc AUCUN COMPTE AU
+           * MONDE ne pouvait l'atteindre, et tout ce que veveprice vend
+           * (`/market/`, l'historique 7 j/30 j, les extrêmes, les modules,
+           * les alertes) était fermé à 100 % des humains ET à 100 % des
+           * robots. Une protection qui bloque tout le monde n'est pas
+           * stricte : elle est cassée. De l'extérieur, les deux se
+           * ressemblent exactement.
+           *
+           * ⭐⭐⭐ ET LE PIÈGE QUI L'A FAIT DURER : `server.ts` IMPORTAIT la
+           * fonction (l. 24) sans jamais l'appeler. Un `grep` la trouvait
+           * ici, dans le fichier des routes — de quoi conclure qu'elle était
+           * branchée. *Un import sans appel est un faux positif pour toute
+           * recherche : il met la preuve au mauvais endroit.*
+           *
+           * ⛔ TROIS GARDE-FOUS, ET AUCUN N'EST DÉCORATIF :
+           *   1. le bloc `/admin` entier exige déjà le cookie d'exploitation
+           *      et passe par `trop(REGLES.admin)` — rien n'est assoupli ;
+           *   2. le nombre de jours est BORNÉ (1..400). Sans borne, une faute
+           *      de frappe accorde un siècle, et rien ne le dit ;
+           *   3. le compte est RETROUVÉ par (site, terme), pas désigné par un
+           *      identifiant transporté dans la page.
+           * ⭐ La trace dit le SITE et la DURÉE, jamais le terme cherché —
+           *   même règle que la recherche juste au-dessus.
+           */
+          if (m === 'POST' && p === '/admin/abonner') {
+            const b = await corpsDe(req);
+            // ⭐ UNE RÉFÉRENCE OPAQUE, PAS LE TERME CHERCHÉ. Ma première
+            //   version renvoyait l'e-mail dans un champ caché ;
+            //   `test/admin.test.ts` l'a refusée — « aucune identité en clair
+            //   dans le HTML », vérifié SUR LA SORTIE. Le banc avait raison
+            //   contre moi, et c'est le code qui a changé.
+            const ref = String(b.get('ref') ?? '');
+            const jours = Number(b.get('jours') ?? 0);
+            let message: string;
+            // ⚠️ `Number.isInteger` ET les bornes : `Number('30j')` rend NaN,
+            //    `Number('')` rend 0, et `NaN > 0` est faux — mais `NaN` passe
+            //    un `!jours` par la bande dans d'autres écritures. On exige la
+            //    forme, on ne la devine pas.
+            if (!Number.isInteger(jours) || jours < 1 || jours > 400) {
+              message = 'Durée refusée : un entier de 1 à 400 jours.';
+            } else {
+              // ⭐ `accorderAbonnement` VÉRIFIE elle-même que le compte existe
+              //   et rend « Compte inconnu. » sinon : on ne redouble pas le
+              //   contrôle ici. Deux vérifications de la même chose finissent
+              //   par diverger, et c'est la plus permissive qui gagne.
+              message = accorderAbonnement(ref, jours);
+            }
+            // ⛔ NI LA RÉFÉRENCE NI LE TERME DANS LA TRACE : on journalise le
+            //   FAIT, jamais QUI. Même règle que la recherche au-dessus.
+            console.log(`[admin] abonnement (${jours} j) : ${message}`);
+            // ⚠️ On ne réaffiche PAS le résultat de recherche : on n'a plus le
+            //   terme, et c'est voulu. La page revient à son état neutre avec
+            //   le message — une page d'exploitation qui garde une identité à
+            //   l'écran après le geste est une identité de plus qui traîne.
+            return html(res, pageAdmin(forme(), parSite(), activite(), undefined, message));
           }
 
           if (m === 'GET' && p === '/admin')

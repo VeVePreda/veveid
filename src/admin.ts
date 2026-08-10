@@ -186,7 +186,10 @@ export function activite(maintenant = new Date()): Activite {
 export interface Trouvaille {
   quoi: 'email' | 'portefeuille' | 'inconnu';
   trouve: boolean;
+
   comptes: {
+    /** Référence OPAQUE pour le geste d'abonnement — voir `chercher()`. */
+    ref: string;
     site: string; cree_le: string; verifie: boolean; verifie_le: string | null;
     a_un_portefeuille: boolean; indice_email: string | null; indice_wallet: string | null;
     abonne_jusqu_a: string | null; en_grace: string | null;
@@ -215,14 +218,15 @@ export function chercher(terme: string): Trouvaille {
   if (quoi === 'inconnu' || !t) return { quoi: 'inconnu', trouve: false, comptes: [] };
 
   const lignes = q<{
+    id: string;
     site: string; cree_le: string; verifie: number; verifie_le: string | null;
     wallet: string | null; email: string | null; abonne_jusqu_a: string | null;
     supprime_le: string | null;
   }>(
     quoi === 'email'
-      ? 'SELECT site, cree_le, verifie, verifie_le, wallet, email, abonne_jusqu_a, supprime_le '
+      ? 'SELECT id, site, cree_le, verifie, verifie_le, wallet, email, abonne_jusqu_a, supprime_le '
         + 'FROM comptes WHERE email=? ORDER BY site'
-      : 'SELECT site, cree_le, verifie, verifie_le, wallet, email, abonne_jusqu_a, supprime_le '
+      : 'SELECT id, site, cree_le, verifie, verifie_le, wallet, email, abonne_jusqu_a, supprime_le '
         + 'FROM comptes WHERE wallet=? ORDER BY site',
     t);
 
@@ -230,6 +234,25 @@ export function chercher(terme: string): Trouvaille {
     quoi,
     trouve: lignes.length > 0,
     comptes: lignes.map((c) => ({
+      /**
+       * 🔴🔴🔴 LOT 122 — LA RÉFÉRENCE OPAQUE, ET POURQUOI ELLE REMPLACE CE
+       * QUE J'AVAIS ÉCRIT D'ABORD.
+       * Ma première version renvoyait le TERME cherché, pour que le geste
+       * d'abonnement puisse refaire la recherche. `test/admin.test.ts` l'a
+       * refusé : « ⛔ ni le terme cherché, qui repartirait dans le HTML ».
+       * ⭐⭐⭐ ET LE BANC AVAIT RAISON CONTRE MOI. Je m'étais convaincu que la
+       * règle protégeait l'URL, l'historique et le `Referer` — trois endroits
+       * qu'un champ caché n'atteint pas. Elle dit autre chose, et elle le dit
+       * SUR LA SORTIE : *aucune identité en clair dans le HTML, quel que soit
+       * le chemin.* Une règle vérifiée sur la sortie ne se contourne pas par
+       * un raisonnement sur l'intention.
+       * ⛔ La tentation était d'assouplir le test. On corrige le CODE.
+       *
+       * ⭐ `id` est un UUID interne : ce n'est ni un e-mail ni un
+       *   portefeuille, il n'apprend rien sur personne, il ne vaut rien sans
+       *   le cookie d'exploitation, et il ne sert qu'un aller-retour.
+       */
+      ref: c.id,
       site: c.site,
       cree_le: c.cree_le,
       verifie: c.verifie === 1,
