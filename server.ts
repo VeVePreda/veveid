@@ -449,7 +449,58 @@ export const serveur = createServer(async (req, res) => {
         return json(res, bilan);
       }
 
-      const c = lireCompte(url.searchParams.get('compte') ?? '');
+      /**
+       * ═══════════════════════════════════════════════════════════════
+       * 🔥 LOT 141 — DEUX CLÉS POUR DÉSIGNER LA CIBLE, UNE SEULE
+       *              RÉSOLUTION. ET LE `sid` GAGNE TOUJOURS.
+       * ═══════════════════════════════════════════════════════════════
+       *
+       * ⭐⭐ POURQUOI ICI, ET PAS UNE ROUTE `/api/avoirs?sid=` DE PLUS
+       *    PLUS HAUT. Écrire un second bloc aurait dupliqué la réponse —
+       *    `avoirs`, `wallet`, `abonne`, `sync`, et le 409. Deux endroits
+       *    à corriger le jour où un champ s'ajoute, et c'est toujours
+       *    celui qu'on a oublié qui sert. On change donc la RÉSOLUTION,
+       *    pas la réponse : tout ce qui suit est intact.
+       *
+       * 🔴 POURQUOI LE `sid` PASSE AVANT `?compte=`, ET NON L'INVERSE, ET
+       *    NON EN REPLI. veveprice ne DÉTIENT pas d'identifiant de
+       *    compte : il a un cookie de session. Lui laisser porter
+       *    l'identifiant reviendrait à le laisser DÉSIGNER un compte — et
+       *    avec le secret de service, il pourrait alors les parcourir
+       *    tous. Le secret dit « tu es un site », pas « tu es cette
+       *    personne » ; il faut les deux.
+       *
+       * ⚠️ ET LA VOIE DE CONTOURNEMENT EST MUETTE, C'EST POUR ÇA QU'ON
+       *    L'ÉCRIT. `/api/session` rend DÉJÀ l'identifiant du compte au
+       *    site : « je lis l'id, je le repasse en `?compte=` »
+       *    marcherait. Un repli — « si le sid ne donne rien, essayons
+       *    `compte` » — rouvrirait la même porte, en ayant l'air d'une
+       *    tolérance. Un `sid` PRÉSENT décide donc seul : s'il ne résout
+       *    pas, c'est un 404, jamais un repli.
+       *
+       * ⛔ `?compte=` N'EST PAS RETIRÉ : MightysArena appelle ainsi. Un
+       *    jeu n'a pas de session de site — il part du portefeuille et
+       *    détient légitimement l'identifiant qu'il a fait créer. La
+       *    règle vise les SITES, qui ont un `sid`.
+       *
+       * 🔴🔴 ET C'EST LA **PRÉSENCE** DU PARAMÈTRE QUI DÉCIDE, PAS SA
+       *    VALEUR. `?sid=&compte=<id>` — un `sid` présent mais vide — est
+       *    la forme la plus banale du bug côté site. Si « vide » se lisait
+       *    « absent », le pouvoir de désigner reviendrait par là, et aucun
+       *    code n'aurait l'air fautif. Mesuré le 12/08 : c'est le seul des
+       *    trois montages douteux que la première version du banc laissait
+       *    passer.
+       *
+       * 🔬 `test/service.test.ts` réclame les cinq : le sid rend les
+       *    avoirs · un identifiant de compte passé en `sid` ne rend rien ·
+       *    `sid` + `compte` ensemble laissent le `sid` décider · un `sid`
+       *    qui ÉCHOUE ne se rabat pas sur `compte` · `?compte=` marche
+       *    encore.
+       */
+      const parSession = url.searchParams.has('sid');
+      const c = parSession
+        ? lireCompte(etatDeLaSession(url.searchParams.get('sid') ?? '').compte ?? '')
+        : lireCompte(url.searchParams.get('compte') ?? '');
       /**
        * 🔴 CORRIGÉ AU LOT 89 : le contrôle était `!c || !c.verifie`.
        *    `verifie` dit « le PORTEFEUILLE est prouvé », pas « le compte
@@ -457,8 +508,12 @@ export const serveur = createServer(async (req, res) => {
        *    un membre parfaitement légitime a `verifie = 0`, et l'API
        *    répondait « compte inconnu » sur un compte qu'elle venait de
        *    lire. On sépare donc les deux questions.
+       *
+       * ⚠️ Le message NOMME laquelle des deux clés a échoué. « compte
+       *    inconnu » sur un `sid` expiré enverrait chercher un défaut de
+       *    base de données là où il n'y a qu'une session à rouvrir.
        */
-      if (!c) return json(res, { erreur: 'compte inconnu' }, 404);
+      if (!c) return json(res, { erreur: parSession ? 'session inconnue' : 'compte inconnu' }, 404);
       if (p === '/api/avoirs' && !c.verifie)
         return json(res, { erreur: 'portefeuille non vérifié' }, 409);
       if (p === '/api/avoirs') return json(res, {

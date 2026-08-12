@@ -57,8 +57,16 @@ export const DUREE_RELAIS_S = 60;
  * OUVERTE authentifiée : quiconque obtiendrait le secret de service
  * pourrait fabriquer un lien `id.digitalcollectible.net/…` qui envoie
  * ailleurs, et il porterait notre domaine.
- * ⭐ Deux valeurs suffisent, et si une troisième manque un jour, elle
- *   s'ajoutera ici — en une ligne, sous les yeux de qui relit.
+ * ⭐ Deux valeurs suffisaient, et la troisième s'est ajoutée ici — en une
+ *   ligne, sous les yeux de qui relit. C'était le contrat.
+ *
+ * 🔴 UNE ENTRÉE DE PLUS N'EST PAS UNE LIGNE DE PLUS. Une destination qui
+ *    ne correspond à aucune route SERVIE ne lève rien : le relais
+ *    consomme le jeton, pose le cookie, redirige — et le serveur renvoie
+ *    vers l'accueil. La personne est connectée, et elle est revenue au
+ *    point de départ. `test/relais.test.ts` réclame donc que CHAQUE valeur
+ *    de cette table soit une route réelle de `server.ts`, celles d'après
+ *    comprises.
  */
 export const DESTINATIONS: Record<string, string> = {
   compte: '/compte',
@@ -66,6 +74,22 @@ export const DESTINATIONS: Record<string, string> = {
   // `/compte` s'il n'y a pas encore de portefeuille — on ne duplique donc
   // pas cette règle ici.
   verifier: '/choisir',
+  /**
+   * 🔥 LOT 141 — LE PARCOURS QUI NE DEMANDE PAS D'ADRESSE.
+   *
+   * ⭐⭐ POURQUOI UNE TROISIÈME ENTRÉE PLUTÔT QU'UNE RÈGLE DANS `verifier`.
+   *   `/choisir` sait déjà se renvoyer vers `/compte` quand il n'y a pas
+   *   de portefeuille — mais un renvoi n'est pas une orientation : il
+   *   dépose la personne sur une page d'où il faut RE-CLIQUER, et le clic
+   *   qu'elle vient de faire disait déjà où elle allait. Le site, lui,
+   *   SAIT si le portefeuille est vérifié avant d'ouvrir le relais. C'est
+   *   donc à l'appelant de nommer le parcours, pas à `/choisir` de le
+   *   deviner une page trop tard.
+   *
+   * ⛔ Et `verifier` reste : ce sont deux parcours différents, pas deux
+   *   versions du même. Qui connaît son adresse va droit à la preuve.
+   */
+  decouvrir: '/decouvrir',
 };
 
 const empreinteDe = (s: string) => createHash('sha256').update(s).digest('hex');

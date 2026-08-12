@@ -14,6 +14,11 @@ import { fileURLToPath } from 'node:url';
  *      porte notre domaine.
  *   3. Un jeton qui survit à sa minute.
  *   4. 🔴 UN BACKTICK DANS LE GABARIT SQL — le piège payé TROIS fois.
+ *
+ * ⭐ LOT 141 — un cinquième, et il ne regarde plus une destination mais
+ *   TOUTES : une destination qui ne correspond à AUCUNE route servie.
+ *   Le détail est au pied du fichier ; ce qu'il faut retenir ici, c'est
+ *   que la liste s'allonge et que le contrôle ne s'allonge pas avec elle.
  */
 
 const dossier = mkdtempSync(join(tmpdir(), 'veveid99-'));
@@ -46,6 +51,26 @@ test('la destination « verifier » mène au parcours de preuve', () => {
   const c = av.creerOuLireCompteParEmail('veveprice','relais2@exemple.fr');
   const p = rl.consommerRelais(rl.creerRelais(c.id, 'verifier')!);
   assert.equal(p.chemin, '/choisir');
+});
+
+/**
+ * 🔥 LOT 141 — LE RACCOURCI VERS LE PARCOURS SANS ADRESSE.
+ *
+ * ⭐⭐ CE QU'IL RETIRE : deux clics et deux redirections. Depuis `/compte/`
+ *   sur veveprice, le bouton envoyait `verifier` ⇒ `/choisir`, qui renvoie
+ *   de lui-même vers `/compte` quand il n'y a pas encore de portefeuille —
+ *   et là il fallait RE-CLIQUER pour atteindre `/decouvrir`. La page qu'on
+ *   venait de promettre était à deux pages de la promesse.
+ *
+ * ⚠️ `verifier` N'EST PAS REMPLACÉE, elle reste : un membre qui a déjà son
+ *    adresse doit continuer d'aller droit au parcours de preuve. Ce sont
+ *    deux parcours, pas deux versions du même.
+ */
+test('⭐ la destination « decouvrir » mène au parcours SANS adresse', () => {
+  const c = av.creerOuLireCompteParEmail('veveprice','relais6@exemple.fr');
+  const p = rl.consommerRelais(rl.creerRelais(c.id, 'decouvrir')!);
+  assert.equal(p.chemin, '/decouvrir',
+    'sans portefeuille, on entre directement sur la page qui ne demande pas d’adresse');
 });
 
 test('🔴 une destination inconnue est REFUSÉE — pas de redirection ouverte', () => {
@@ -99,6 +124,50 @@ test('le jeton n’est pas stocké en clair — une base lue ne fait entrer pers
  *   ailleurs — trois fois de suite, on a cherché la ponctuation.
  */
 const RACINE = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+// ═════════════════════════════════════════════════════════════════════════
+// 🔥 LOT 141 — UNE DESTINATION QUI NE MÈNE NULLE PART
+// ═════════════════════════════════════════════════════════════════════════
+/**
+ * ⭐⭐⭐ UN INVARIANT, PAS UNE SECONDE LISTE.
+ *
+ * La tentation, en ajoutant `decouvrir`, était d'écrire un test de plus :
+ * « `decouvrir` mène à `/decouvrir` ». Il y en a un, juste au-dessus, et il
+ * ne prouve qu'une chose — que la table dit ce qu'elle dit. Il serait vert
+ * si `/decouvrir` n'était servie par personne.
+ *
+ * Or c'est exactement la panne qu'on redoute : le relais consomme le
+ * jeton, pose le cookie, redirige — et le serveur répond par un renvoi
+ * vers l'accueil. La personne est bien connectée, et elle atterrit au
+ * point de départ. Aucune erreur, aucun journal, rien à chercher.
+ *
+ * ⭐ Ce contrôle porte donc sur TOUTE la table, présente et à venir. Une
+ *   quatrième destination ajoutée dans six mois sera réclamée sans que
+ *   personne ait à y penser — c'est le seul genre de contrôle qui survit
+ *   à l'oubli.
+ */
+test('🔴 CHAQUE destination du relais est une route RÉELLEMENT servie', () => {
+  const src = readFileSync(join(RACINE, 'server.ts'), 'utf-8');
+
+  /**
+   * ⭐ AUTO-CONTRÔLE D'ABORD, ET IL NE VIEILLIT PAS. Ce banc reconnaît une
+   *   route à la forme `p === '/xxx'`. Le jour où `server.ts` est réécrit
+   *   avec un routeur, cette forme disparaît : la boucle ci-dessous
+   *   déclarerait alors TOUT manquant — ou, pire, si on l'écrivait à
+   *   l'envers, tout présent. On vérifie donc que l'instrument voit encore
+   *   quelque chose, sans figer un COMPTE qu'il faudrait penser à relever.
+   */
+  assert.match(src, /p === '\/[a-z-]+'/,
+    'ce banc ne sait plus reconnaître une route : il ne contrôle plus rien');
+
+  const chemins = Object.entries(rl.DESTINATIONS);
+  assert.ok(chemins.length > 0, 'une table de destinations vide ne se contrôle pas');
+
+  for (const [nom, chemin] of chemins)
+    assert.ok(src.includes(`p === '${chemin}'`),
+      `la destination « ${nom} » mène à « ${chemin} », que AUCUNE route de server.ts ne sert. `
+      + 'Le relais ferait entrer la personne, puis la renverrait à l’accueil — sans une erreur.');
+});
 
 test('🔴 aucun backtick dans les gabarits SQL de db.ts', () => {
   const src = readFileSync(join(RACINE, 'src', 'db.ts'), 'utf-8');
