@@ -1,0 +1,99 @@
+# ⚠️ DEPOT : VeVePreda/veveid   ·   CHEMIN : .github/workflows/bancs.yml
+#
+# 🔴🔴 POURQUOI CE FICHIER EXISTE — MESURÉ LE 12/08/2026
+#
+#   GET /repos/VeVePreda/veveid/actions/runs  ->  "total_count": 0
+#   GET /repos/VeVePreda/veveid/contents/.github/workflows  ->  404
+#
+# Ce dépôt porte 144 bancs. AUCUNE MACHINE NE LES A JAMAIS JOUÉS. Ils ne
+# tournent que si quelqu'un tape la commande à la main, et le Dockerfile ne
+# copie même pas le dossier `test/` dans l'image — il le dit d'ailleurs en
+# toutes lettres : « On ne lance pas la suite de tests complète ».
+#
+# ⭐⭐⭐ LA PANNE LA PLUS DANGEREUSE NE PRODUIT AUCUN RUN ROUGE. Un banc qui
+#    n'est jamais exécuté et un banc qui passe se ressemblent exactement,
+#    vus depuis GitHub : dans les deux cas, rien de rouge nulle part.
+#
+# ⚠️ ET CE QU'IL NE FAIT PAS, IL FAUT LE SAVOIR : il tourne APRÈS le dépôt.
+#    Il CONSTATE, il n'EMPÊCHE pas. La seule porte que le déploiement
+#    respecte est le Dockerfile, et y mettre `npm test` serait un autre
+#    choix, à peser séparément — un banc sensible à l'environnement
+#    bloquerait alors tout déploiement, ce qui serait pire.
+
+name: Bancs (npm test)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  bancs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ⭐ LA MÊME VERSION QUE LE DOCKERFILE, ET POUR LA MÊME RAISON.
+      # L'exécution directe d'un `.ts` sans drapeau n'existe QU'À PARTIR DE
+      # NODE 22.18. En dessous, les bancs échoueraient sur une erreur de
+      # syntaxe TypeScript — un rouge qui accuserait le code au lieu de
+      # nommer la version.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: La version permet-elle d'exécuter du TypeScript ?
+        run: |
+          node -e "const [a,b]=process.versions.node.split('.').map(Number); \
+            if (a<22 || (a===22 && b<18)) { \
+              console.error('🔴 Node '+process.versions.node+' est trop ancien : il faut 22.18 ou plus.'); \
+              process.exit(1); \
+            } \
+            console.log('✅ Node '+process.versions.node);"
+
+      # ⭐ AUCUN `npm ci` : ce dépôt n'a AUCUNE dépendance, c'est son
+      #   principe fondateur. Un `npm ci` sans `package-lock.json` échouerait,
+      #   et ce rouge-là ne dirait rien du code.
+      # ═══════════════════════════════════════════════════════════════════
+      # LES BANCS, ET LE COMPTE DES BANCS — EN UN SEUL PASSAGE
+      # ═══════════════════════════════════════════════════════════════════
+      # 🔴 LE PLANCHER SE COMPTE, IL NE SE RELIT PAS. Un banc supprimé, un
+      #    fichier oublié à l'upload, un `test/` incomplet : la suite reste
+      #    VERTE, simplement plus petite. Le vert ne dit jamais COMBIEN de
+      #    choses ont été vérifiées.
+      # ⚠️ Ce nombre est un CLIQUET : il monte avec les lots, jamais il ne
+      #    descend. Le message dit quoi faire le jour où il bouge.
+      # ⭐ CE QU'IL COMPTE EXACTEMENT : `# pass`, c'est-à-dire les bancs
+      #   RÉUSSIS — pas les bancs lancés. Un banc qui échoue fait donc
+      #   baisser le compte AUSSI, et les deux contrôles se recouvrent.
+      #   C'est voulu : mesuré le 12/08, un banc cassé sort en « 143 pour
+      #   un plancher de 144 » avant même d'atteindre la ligne d'échec.
+      # ⭐ Un seul `npm test`, relu depuis le journal : le lancer deux fois
+      #   ferait mesurer une exécution différente de celle qu'on a jugée.
+      - name: Les bancs, et leur compte
+        run: |
+          PLANCHER=144
+          set -o pipefail
+          ECHEC=
+          npm test 2>&1 | tee /tmp/bancs.log || ECHEC=1
+          VU=$(sed -n 's/^# pass \([0-9]*\)$/\1/p' /tmp/bancs.log | tail -1)
+          echo "::notice::bancs joués : ${VU:-illisible} · plancher : $PLANCHER"
+          if [ -z "$VU" ]; then
+            echo "🔴 impossible de LIRE le nombre de bancs joués."
+            echo "   C'est l'INSTRUMENT qui est cassé, pas forcément le code :"
+            echo "   ne concluez rien sur le dépôt tant que ce compte n'est pas lisible."
+            exit 1
+          fi
+          if [ "$VU" -lt "$PLANCHER" ]; then
+            echo "🔴 $VU bancs joués pour un plancher de $PLANCHER : il en manque $((PLANCHER-VU))."
+            echo "   Soit un fichier de test n'a pas été déposé, soit des bancs ont été retirés."
+            echo "   ⛔ Ne baissez PAS le plancher pour faire passer : cherchez ce qui manque."
+            exit 1
+          fi
+          if [ "$VU" -gt "$PLANCHER" ]; then
+            echo "::notice::$VU bancs — montez le plancher de ce fichier à $VU, dans le même lot."
+          fi
+          if [ -n "$ECHEC" ]; then
+            echo "🔴 des bancs ont ÉCHOUÉ — le compte est bon, le résultat non."
+            exit 1
+          fi
